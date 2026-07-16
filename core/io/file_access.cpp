@@ -35,6 +35,7 @@
 #include "core/crypto/crypto_core.h"
 #include "core/io/file_access_compressed.h"
 #include "core/io/file_access_encrypted.h"
+#include "core/io/file_access_encrypted_hmac.h"
 #include "core/io/file_access_pack.h"
 #include "core/io/marshalls.h"
 #include "core/io/resource_uid.h"
@@ -210,6 +211,22 @@ Ref<FileAccess> FileAccess::open_encrypted(const String &p_path, ModeFlags p_mod
 	return fae;
 }
 
+Ref<FileAccess> FileAccess::open_encrypted_hmac(const String &p_path, ModeFlags p_mode_flags, const Vector<uint8_t> &p_mac_key, const Vector<uint8_t> &p_key, const Vector<uint8_t> &p_iv) {
+	Ref<FileAccess> fa = _open(p_path, p_mode_flags);
+	if (fa.is_null()) {
+		return fa;
+	}
+
+	Ref<FileAccessEncryptedHMAC> faeh;
+	faeh.instantiate();
+	Error err = faeh->open_and_parse(fa, p_mac_key, p_key, (p_mode_flags == WRITE) ? FileAccessEncryptedHMAC::MODE_WRITE_AES256 : FileAccessEncryptedHMAC::MODE_READ, true, p_iv);
+	last_file_open_error = err;
+	if (err) {
+		return Ref<FileAccess>();
+	}
+	return faeh;
+}
+
 Ref<FileAccess> FileAccess::open_encrypted_pass(const String &p_path, ModeFlags p_mode_flags, const String &p_pass) {
 	Ref<FileAccess> fa = _open(p_path, p_mode_flags);
 	if (fa.is_null()) {
@@ -224,6 +241,22 @@ Ref<FileAccess> FileAccess::open_encrypted_pass(const String &p_path, ModeFlags 
 		return Ref<FileAccess>();
 	}
 	return fae;
+}
+
+Ref<FileAccess> FileAccess::open_encrypted_hmac_pass(const String &p_path, ModeFlags p_mode_flags, const String &p_mac_pass, const String &p_pass) {
+	Ref<FileAccess> fa = _open(p_path, p_mode_flags);
+	if (fa.is_null()) {
+		return fa;
+	}
+
+	Ref<FileAccessEncryptedHMAC> faeh;
+	faeh.instantiate();
+	Error err = faeh->open_and_parse_password(fa, p_mac_pass, p_pass, (p_mode_flags == WRITE) ? FileAccessEncryptedHMAC::MODE_WRITE_AES256 : FileAccessEncryptedHMAC::MODE_READ);
+	last_file_open_error = err;
+	if (err) {
+		return Ref<FileAccess>();
+	}
+	return faeh;
 }
 
 Ref<FileAccess> FileAccess::open_compressed(const String &p_path, ModeFlags p_mode_flags, CompressionMode p_compress_mode) {
@@ -1015,7 +1048,9 @@ String FileAccess::get_sha256(const String &p_file) {
 void FileAccess::_bind_methods() {
 	ClassDB::bind_static_method("FileAccess", D_METHOD("open", "path", "flags"), &FileAccess::_open);
 	ClassDB::bind_static_method("FileAccess", D_METHOD("open_encrypted", "path", "mode_flags", "key", "iv"), &FileAccess::open_encrypted, DEFVAL(Vector<uint8_t>()));
+	ClassDB::bind_static_method("FileAccess", D_METHOD("open_encrypted_hmac", "path", "mode_flags", "mac_key", "enc_key", "iv"), &FileAccess::open_encrypted_hmac, DEFVAL(Vector<uint8_t>()));
 	ClassDB::bind_static_method("FileAccess", D_METHOD("open_encrypted_with_pass", "path", "mode_flags", "pass"), &FileAccess::open_encrypted_pass);
+	ClassDB::bind_static_method("FileAccess", D_METHOD("open_encrypted_hmac_pass", "path", "mode_flags", "mac_pass", "enc_pass"), &FileAccess::open_encrypted_hmac_pass);
 	ClassDB::bind_static_method("FileAccess", D_METHOD("open_compressed", "path", "mode_flags", "compression_mode"), &FileAccess::open_compressed, DEFVAL(0));
 	ClassDB::bind_static_method("FileAccess", D_METHOD("get_open_error"), &FileAccess::get_open_error);
 	ClassDB::bind_static_method("FileAccess", D_METHOD("create_temp", "mode_flags", "prefix", "extension", "keep"), &FileAccess::_create_temp, DEFVAL(""), DEFVAL(""), DEFVAL(false));

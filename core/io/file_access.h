@@ -243,6 +243,8 @@ public:
 	static Ref<FileAccess> create_temp(ModeFlags p_mode_flags, const String &p_prefix = "", const String &p_extension = "", bool p_keep = false, Error *r_error = nullptr);
 
 	static Ref<FileAccess> open_encrypted(const String &p_path, ModeFlags p_mode_flags, const Vector<uint8_t> &p_key, const Vector<uint8_t> &p_iv = Vector<uint8_t>());
+	static Ref<FileAccess> open_encrypted_hmac(const String &p_path, ModeFlags p_mode_flags, const Vector<uint8_t> &p_mac_key, const Vector<uint8_t> &p_key, const Vector<uint8_t> &p_iv = Vector<uint8_t>());
+	static Ref<FileAccess> open_encrypted_hmac_pass(const String &p_path, ModeFlags p_mode_flags, const String &p_mac_key, const String &p_key);
 	static Ref<FileAccess> open_encrypted_pass(const String &p_path, ModeFlags p_mode_flags, const String &p_pass);
 	static Ref<FileAccess> open_compressed(const String &p_path, ModeFlags p_mode_flags, CompressionMode p_compress_mode = COMPRESSION_FASTLZ);
 	static Error get_open_error();
