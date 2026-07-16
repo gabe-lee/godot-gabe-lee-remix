@@ -82,6 +82,7 @@
 #include "core/object/script_language_extension.h"
 #include "core/object/undo_redo.h"
 #include "core/object/worker_thread_pool.h"
+#include "core/object/ref_counted_callback.h"
 #include "core/os/main_loop.h"
 #include "core/os/os.h"
 #include "core/os/time.h"
@@ -144,6 +145,7 @@ void register_core_types() {
 
 	GDREGISTER_CLASS(Object);
 	GDREGISTER_CLASS(RefCounted);
+	GDREGISTER_CLASS(CallbackRefCounted);
 	GDREGISTER_CLASS(WeakRef);
 	GDREGISTER_CLASS(Resource);
 
