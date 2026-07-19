@@ -1,9 +1,11 @@
 
 #include "entity_manager.h"
 #include "core/error/error_macros.h"
+#include "core/object/ref_counted.h"
 #include "core/os/memory.h"
 #include "core/typedefs.h"
 #include "core/variant/variant.h"
+#include "modules/entity_manager/entity_ref.h"
 #include <cstdint>
 #include <cstring>
 
@@ -85,80 +87,195 @@ void EntityManager::deinitialize() {
     memfree_t(field_idx_offset_list);
     memfree_t(num_fields_list);
     memfree_t(next_free_tracking_field_list);
+    memfree_t(num_free_list);
     // Len = total_num_id_fields
     memfree_t(field_allowed_id_list);
     init_status = DEINITIALIZED;
 }
 
-void EntityManager::clear_entity_list(TypeIndex p_type) {
-    ERR_FAIL_COND_MSG(p_type >= num_types, "type index out of bounds for total number of defined types");
-    FieldRanges ranges = get_field_ranges(p_type);
-    TypeFlags flags = type_flags_list[p_type];
-    if (has_at_least_1_variant_or_ref_field(flags)) {
-        for (FieldIndex f = ranges.start; f < ranges.end; f += 1) {
-            Size stride = field_stride_list[f];
-            Type type = field_type_list[f];
-            if (is_variant(type)) {
-                Size idx_limit = next_unused_index_list[p_type];
-                for (Size i = 0; i < idx_limit; i += 1) {
-                    if (!is_free_abs(ranges.free, i)) {
-                        void* ptr = get_elem_ptr_abs(f, stride, i);
-                        Variant* var_ptr = ptrcast(Variant*, ptr);
-                        var_ptr->~Variant();
-                    }
-                }
-            } else if (is_entity_ref(type)) {
-                Size idx_limit = next_unused_index_list[p_type];
-                for (Size i = 0; i < idx_limit; i += 1) {
-                    if (!is_free_abs(ranges.free, i)) {
-                        void* ptr = get_elem_ptr_abs(f, stride, i);
-                        Ref<EntityRef>* ref_ptr = ptrcast(Ref<EntityRef>*, ptr);
-                        ref_ptr->unref();
-                    }
-                }
-            }
-        }
-    }
-    lens[p_type] = 0;
-    first_free_list[p_type] = 0;
-    next_unused_index_list[p_type] = 1;
-}
 
 void EntityManager::free_entity_list_memory(TypeIndex p_type) {
     TypeFlags flags = type_flags_list[p_type];
     FieldRanges ranges = get_field_ranges(p_type);
+    Size idx_limit = next_unused_index_list[p_type];
     for (FieldIndex f = ranges.start; f < ranges.end; f += 1) {
         void* data_raw = field_data_ptrs[f];
         if (has_at_least_1_variant_or_ref_field(flags)) {
             Size stride = field_stride_list[f];
             Type type = field_type_list[f];
-            if (is_variant(type)) {
-                Size idx_limit = next_unused_index_list[p_type];
-                for (Size i = 0; i < idx_limit; i += 1) {
-                    if (!is_free_abs(ranges.free, i)) {
-                        void* ptr = get_elem_ptr_abs(f, stride, i);
-                        Variant* var_ptr = ptrcast(Variant*, ptr);
-                        var_ptr->~Variant();
+            Type elem = get_elem_type(type);
+            switch (elem) {
+                case VARIANT: {
+                    for (Size i = 0; i < idx_limit; i += 1) {
+                        if (!is_free_abs(ranges.free, i)) {
+                            Variant* var_ptr = get_elem_ptr_known_stride_cast(Variant*, f, stride, i);
+                            var_ptr->~Variant();
+                        }
                     }
+                    break;
                 }
-            } else if (is_entity_ref(type)) {
-                Size idx_limit = next_unused_index_list[p_type];
-                for (Size i = 0; i < idx_limit; i += 1) {
-                    if (!is_free_abs(ranges.free, i)) {
-                        void* ptr = get_elem_ptr_abs(f, stride, i);
-                        Ref<EntityRef>* ref_ptr = ptrcast(Ref<EntityRef>*, ptr);
-                        ref_ptr->unref();
+                case ENTITY_REF: {
+                    for (Size i = 0; i < idx_limit; i += 1) {
+                        if (!is_free_abs(ranges.free, i)) {
+                            Ref<EntityRef>* ref_ptr = get_elem_ptr_known_stride_cast(Ref<EntityRef>*, f, stride, i);
+                            if (ref_ptr->ptr()) {
+                                ref_ptr->ptr()->invalidate();
+                            }
+                            ref_ptr->unref();
+                        }
                     }
+                    break;
                 }
+                default: break;
             }
         }
         memfree(data_raw);
+    }
+    if (enable_entity_refs) {
+        DEV_ASSERT(field_stride_list[ranges.ref] == sizeof(Ref<EntityRef>))
+        for (Size i = 0; i < idx_limit; i += 1) {
+            if (!is_free_abs(ranges.free, i)) {
+                Ref<EntityRef>* ref_ptr = get_ent_ref_ptr(ranges.ref, i);
+                if (ref_ptr->ptr()) {
+                    ref_ptr->ptr()->invalidate();
+                }
+                ref_ptr->unref();
+            }
+        }
     }
     lens[p_type] = 0;
     caps[p_type] = 0;
     first_free_list[p_type] = 0;
     next_unused_index_list[p_type] = 1;
 }
+
+void EntityManager::clear_entity_list(TypeIndex p_type) {
+    ERR_FAIL_COND_MSG(p_type >= num_types, "type index out of bounds for total number of defined types");
+    FieldRanges ranges = get_field_ranges(p_type);
+    TypeFlags flags = type_flags_list[p_type];
+    Size idx_limit = next_unused_index_list[p_type];
+    if (has_at_least_1_variant_or_ref_field(flags)) {
+        for (FieldIndex f = ranges.start; f < ranges.end; f += 1) {
+            Size stride = field_stride_list[f];
+            Type type = field_type_list[f];
+            Type elem = get_elem_type(type);
+            switch (elem) {
+                case VARIANT: {
+                    for (Size i = 0; i < idx_limit; i += 1) {
+                        if (!is_free_abs(ranges.free, i)) {
+                            Variant* var_ptr = get_elem_ptr_known_stride_cast(Variant*, f, stride, i);
+                            var_ptr->~Variant();
+                        }
+                    }
+                    break;
+                }
+                case ENTITY_REF: {
+                    for (Size i = 0; i < idx_limit; i += 1) {
+                        if (!is_free_abs(ranges.free, i)) {
+                            Ref<EntityRef>* ref_ptr = get_elem_ptr_known_stride_cast(Ref<EntityRef>*, f, stride, i);
+                            if (ref_ptr->ptr()) {
+                                ref_ptr->ptr()->invalidate();
+                            }
+                            ref_ptr->unref();
+                        }
+                    }
+                    break;
+                }
+                default: break;
+            }
+        }
+    }
+    //FIXME get ref list if needed
+    lens[p_type] = 0;
+    first_free_list[p_type] = 0;
+    next_unused_index_list[p_type] = 1;
+}
+
+bool EntityManager::entity_exists_internal(IdParts p_parts, FieldRanges p_field_ranges, bool ignore_gen) {
+    if (is_free_abs(p_field_ranges.free, p_parts.index)) {return false;}
+    if (!ignore_gen) {
+        Gen* gen_data = ptrcast(Gen*, field_data_ptrs[p_field_ranges.gen]);
+        Gen gen = gen_data[p_parts.index];
+        if (gen != p_parts.gen) {return false;}
+    }
+    return true;
+}
+
+bool EntityManager::entity_exists(Id p_id) {
+    IdParts parts = get_id_parts(p_id);
+    if (invalid_id_parts(parts)) {return false;}
+    FieldRanges ranges = get_field_ranges(parts.type_idx);
+    return entity_exists_internal(parts, ranges);
+}
+
+bool EntityManager::destroy_internal(IdParts p_parts, FieldRanges p_field_ranges, TypeFlags p_flags) {
+    if (!entity_exists_internal(p_parts, p_field_ranges)) { return false; }
+    if (has_at_least_1_variant_or_ref_field(p_flags)) {
+        for (FieldIndex f = p_field_ranges.start; f < p_field_ranges.end; f += 1) {
+            Size stride = field_stride_list[f];
+            Type type = field_type_list[f];
+            Type elem = get_elem_type(type);
+            switch (elem) {
+                case VARIANT: {
+                    Variant* var_ptr = get_elem_ptr_known_stride_cast(Variant*, f, stride, p_parts.index);
+                    var_ptr->~Variant();
+                    *var_ptr = Variant();
+                    break;
+                }
+                case ENTITY_REF: {
+                    Ref<EntityRef>* ref_ptr = get_elem_ptr_known_stride_cast(Ref<EntityRef>*, f, stride, p_parts.index);
+                    if (ref_ptr->ptr()) {
+                        ref_ptr->ptr()->invalidate();
+                    }
+                    ref_ptr->unref();
+                    *ref_ptr = Ref<EntityRef>();
+                    break;
+                }
+                default: break;
+            }
+        }
+    }
+    if (enable_entity_refs) {
+        Ref<EntityRef>* ent_ref_ptr = get_elem_ptr_cast(Ref<EntityRef>*, p_field_ranges.ref, p_parts.index);
+        if (ent_ref_ptr->ptr()) {
+            ent_ref_ptr->ptr()->invalidate();
+        }
+        ent_ref_ptr->unref();
+        *ent_ref_ptr = Ref<EntityRef>();
+    }
+    DEV_ASSERT(field_stride_list[p_field_ranges.gen] == sizeof(Gen))
+    Gen* gen_ptr = get_gen_ptr(p_field_ranges.gen, p_parts.index);
+    Gen gen = *gen_ptr;
+    gen += 1;
+    *gen_ptr = gen;
+    set_free_flag_internal(p_field_ranges.free, p_parts.index);
+    Size* next_free_ptr_on_entity = get_elem_ptr_cast(Size*, p_field_ranges.next_free, p_parts.index);
+    Size prev_first_free = first_free_list[p_parts.type_idx];
+    *next_free_ptr_on_entity = prev_first_free;
+    first_free_list[p_parts.type_idx] = p_parts.index;
+    num_free_list[p_parts.type_idx] += 1;
+    return true;
+}
+
+bool EntityManager::destroy(Id p_id) {
+    IdParts parts = get_id_parts(p_id);
+    if (invalid_id_parts(parts)) {return false;}
+    FieldRanges ranges = get_field_ranges(parts.type_idx);
+    TypeFlags flags = type_flags_list[parts.type_idx];
+    return destroy_internal(parts, ranges, flags);
+}
+
+Id EntityManager::create_internal(TypeIndex p_type, FieldRanges p_field_ranges, TypeFlags p_flags) {
+    //FIXME
+    return 0;
+}
+Id EntityManager::create(TypeIndex p_type_idx) {
+    ERR_FAIL_COND_V_MSG(p_type_idx > num_types, Variant(), "type index is greater then the total number of types");
+    FieldRanges ranges = get_field_ranges(p_type_idx);
+    TypeFlags flags = type_flags_list[p_type_idx];
+    return create_internal(p_type_idx, ranges, flags);
+}
+
 
 void EntityManager::define_system(TypeIndex p_num_types, bool p_enable_entity_refs) {
     ERR_FAIL_COND_MSG(init_status != UNINIT, "`define_system()` must be the FIRST step in the EntitySystem initialization process");
@@ -169,6 +286,7 @@ void EntityManager::define_system(TypeIndex p_num_types, bool p_enable_entity_re
     caps = memalloc_zeroed_t(Size*, p_num_types * sizeof(Size));
     next_unused_index_list = memalloc_zeroed_t(Size*, p_num_types * sizeof(Size));
     first_free_list = memalloc_zeroed_t(Size*, p_num_types * sizeof(Size));
+    num_free_list = memalloc_zeroed_t(Size*, p_num_types * sizeof(Size));
     type_flags_list = memalloc_zeroed_t(TypeFlags*, p_num_types * sizeof(TypeFlags));
     field_idx_offset_list = memalloc_zeroed_t(FieldIndex*, p_num_types * sizeof(FieldIndex));
     num_fields_list = memalloc_zeroed_t(FieldIndex*, p_num_types * sizeof(FieldIndex));

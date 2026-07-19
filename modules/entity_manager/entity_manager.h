@@ -1,6 +1,7 @@
 
 #pragma once
 
+#include "core/error/error_macros.h"
 #include "core/object/ref_counted.h"
 #include "core/typedefs.h"
 #include "core/variant/dictionary.h"
@@ -9,6 +10,8 @@
 #include <cstdint>
 
 #define ptrcast(m_type, m_mem) reinterpret_cast<m_type>(m_mem)
+#define get_elem_ptr_cast(m_type, m_field, m_index) reinterpret_cast<m_type>(get_elem_ptr(m_field, m_index))
+#define get_elem_ptr_known_stride_cast(m_type, m_field, m_stride, m_index) reinterpret_cast<m_type>(get_elem_ptr_known_stride(m_field, m_stride, m_index))
 
 typedef uint32_t Index;
 typedef uint64_t Type;
@@ -254,6 +257,7 @@ private:
     Size* first_free_list = nullptr;
     Size* next_unused_index_list = nullptr;
     TypeFlags* type_flags_list = nullptr;
+    Size* num_free_list = nullptr;
     // these pointer lens = total_num_fields
     Type* field_type_list = nullptr;
     void** field_data_ptrs = nullptr;
@@ -303,18 +307,14 @@ private:
         uint8_t block = list[block_idx];
         return (block & bit) == bit;
     }
-    _FORCE_INLINE_ void* get_elem_ptr_abs(FieldIndex p_field_idx, Size stride, Size p_ent_idx) {
-        uint8_t* list = ptrcast(uint8_t*, field_data_ptrs[p_field_idx]);
-        return list + (stride * p_ent_idx);
-    }
-    _FORCE_INLINE_ void set_free_abs(FieldIndex p_free_list_idx, Size p_ent_idx) {
+    _FORCE_INLINE_ void set_free_flag_internal(FieldIndex p_free_list_idx, Size p_ent_idx) {
         Size block_idx = p_ent_idx >> 3;
         Size bit_shift = p_ent_idx & 7;
         uint8_t bit = (uint8_t)1 << bit_shift;
         uint8_t* list = ptrcast(uint8_t*, field_data_ptrs[p_free_list_idx]);
         list[block_idx] |= bit;
     }
-    _FORCE_INLINE_ void set_used_abs(FieldIndex p_free_list_idx, Size p_ent_idx) {
+    _FORCE_INLINE_ void set_used_flag_internal(FieldIndex p_free_list_idx, Size p_ent_idx) {
         Size block_idx = p_ent_idx >> 3;
         Size bit_shift = p_ent_idx & 7;
         uint8_t bit = (uint8_t)1 << bit_shift;
@@ -358,6 +358,12 @@ private:
         parts.index = static_cast<Gen>(u_id & INDEX_MASK_LO);
         return parts;
     }
+    _FORCE_INLINE_ bool invalid_id_parts(IdParts p_parts) {
+        ERR_FAIL_COND_V_MSG(p_parts.type_idx >= num_types, true, "`type_idx` segment of entity id was out of bounds for max number of types");
+        Size index_limit_for_type = next_unused_index_list[p_parts.type_idx];
+        ERR_FAIL_COND_V_MSG(p_parts.index >= index_limit_for_type, true, "`index` segment of entity id was out of bounds for max number of elements in type sub-list");
+        return false;
+    }
     _FORCE_INLINE_ static Id make_id(TypeIndex type_idx, Gen gen, Size index) {
         uint64_t u_id = static_cast<uint64_t>(index);
         u_id |= static_cast<uint64_t>(gen) << GEN_SHIFT;
@@ -367,8 +373,34 @@ private:
     _FORCE_INLINE_ static Id make_id(IdParts parts) {
         return make_id(parts.type_idx, parts.gen, parts.index);
     }
+    _FORCE_INLINE_ void* get_elem_ptr(FieldIndex p_field_idx_abs, Size p_index) {
+        uint8_t* data_raw = ptrcast(uint8_t*, field_data_ptrs[p_field_idx_abs]);
+        Size stride = field_stride_list[p_field_idx_abs];
+        data_raw = data_raw + (stride * p_index);
+        return ptrcast(void*, data_raw);
+    }
+    _FORCE_INLINE_ void* get_elem_ptr_known_stride(FieldIndex p_field_idx_abs, Size p_stride, Size p_index) {
+        uint8_t* data_raw = ptrcast(uint8_t*, field_data_ptrs[p_field_idx_abs]);
+        data_raw = data_raw + (p_stride * p_index);
+        return ptrcast(void*, data_raw);
+    }
+    _FORCE_INLINE_ Ref<EntityRef>* get_ent_ref_ptr(FieldIndex p_field_idx_abs, Size p_index) {
+        uint8_t* data_raw = ptrcast(uint8_t*, field_data_ptrs[p_field_idx_abs]);
+        data_raw = data_raw + (sizeof(Ref<EntityRef>) * p_index);
+        return ptrcast(Ref<EntityRef>*, data_raw);
+    }
+    _FORCE_INLINE_ Gen* get_gen_ptr(FieldIndex p_field_idx_abs, Size p_index) {
+        DEV_ASSERT(field_stride_list[p_field_idx_abs] == sizeof(Gen))
+        uint8_t* data_raw = ptrcast(uint8_t*, field_data_ptrs[p_field_idx_abs]);
+        data_raw = data_raw + (sizeof(Gen) * p_index);
+        return ptrcast(Gen*, data_raw);
+    }
     void free_entity_list_memory(TypeIndex p_type);
-
+    bool destroy_internal(IdParts parts, FieldRanges p_field_ranges, TypeFlags p_flags);
+    Id create_internal(TypeIndex p_type, FieldRanges p_field_ranges, TypeFlags p_flags);
+    bool entity_exists_internal(IdParts parts, FieldRanges p_field_ranges, bool ignore_gen = false);
+    Variant get_internal(IdParts parts, FieldRanges p_field_ranges, TypeFlags p_flags);
+    bool set_internal(IdParts parts, FieldRanges p_field_ranges, Variant val);
 public:
     void clear_entity_list(TypeIndex p_type);
 	void deinitialize();
@@ -380,7 +412,7 @@ public:
     Variant get(Id p_id, FieldIndex p_field_index) const;
     Ref<EntityRef> get_entity_ref(Id p_id);
     bool set(Id p_id, FieldIndex p_field_index, Variant p_val);
-    Id create(FieldIndex p_type);
+    Id create(TypeIndex p_type);
     bool destroy(Id p_id);
     bool entity_exists(Id p_id);
     // Init process
