@@ -128,6 +128,11 @@ inline void operator delete(void *p_mem, void *(*p_allocfunc)(size_t p_size)) {
 #define memrealloc(m_mem, m_size) Memory::realloc_static(m_mem, m_size)
 #define memfree(m_mem) Memory::free_static(m_mem)
 
+#define memalloc_t(m_t, m_size) reinterpret_cast<m_t>(Memory::alloc_static(m_size))
+#define memalloc_zeroed_t(m_t, m_size) reinterpret_cast<m_t>(Memory::alloc_static_zeroed(m_size))
+#define memrealloc_t(m_t, m_mem, m_size) reinterpret_cast<m_t>(Memory::realloc_static(reinterpret_cast<void*>(m_mem), m_size))
+#define memfree_t(m_mem) Memory::free_static(reinterpret_cast<void*>(m_mem))
+
 template <typename T, typename Enable = void>
 struct memnew_result {
 	using class_name = T *;
