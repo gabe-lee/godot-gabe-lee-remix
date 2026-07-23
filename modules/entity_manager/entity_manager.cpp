@@ -1,11 +1,24 @@
 
 #include "entity_manager.h"
 #include "core/error/error_macros.h"
+#include "core/math/aabb.h"
+#include "core/math/basis.h"
+#include "core/math/color.h"
+#include "core/math/math_defs.h"
+#include "core/math/plane.h"
+#include "core/math/projection.h"
+#include "core/math/quaternion.h"
+#include "core/math/rect2.h"
+#include "core/math/rect2i.h"
+#include "core/math/vector2.h"
+#include "core/math/vector2i.h"
 #include "core/os/memory.h"
 #include "core/typedefs.h"
+#include "core/variant/array.h"
 #include "core/variant/variant.h"
 #include <cstdint>
 #include <cstring>
+#include "utils.hpp"
 
 void EntityManager::_bind_methods() {
     // bind gdscript visible methods here
@@ -202,8 +215,315 @@ EntityManager::Id EntityManager::create(TypeIndex p_type_idx) {
 }
 
 Variant EntityManager::get_internal(IdData p_id_parts, TypeData p_type_data, FieldIndex p_field_index, FieldData p_field_data) {
-    //TODO
-    return Variant();
+    Variant out;
+    Index p_idx = p_id_parts.get_idx();
+    if (p_field_data.fixed_len > 1) {
+        if (p_field_data.struct_t == NONE) { // array of vals
+            switch (p_field_data.elem_t) {
+                case U1: {
+                    Index p_idx_plus_fixed = p_idx + p_field_data.fixed_len;
+                    PackedByteArray arr;
+                    arr.resize(p_field_data.fixed_len);
+                    uint8_t* dst_ptr =  arr.ptrw();
+                    uint8_t* base_src_ptr = p_field_data.get_elem_ptr_cast<uint8_t>(0);
+                    for (Index i = p_idx; i < p_idx_plus_fixed; i += 1, dst_ptr += 1) {
+                        //FIXME make a 'multi-bits' version in 'utils.hpp'gi
+                    }
+                    out = Variant(arr);
+                    break;
+                }
+                case U2: {
+                    PackedByteArray arr;
+                    arr.resize(p_field_data.fixed_len);
+                    uint8_t* dst_ptr =  arr.ptrw();
+                    uint8_t* base_src_ptr = p_field_data.get_elem_ptr_cast<uint8_t>(0);
+                    for (Index i = 0; i < p_field_data.fixed_len; i += 1, dst_ptr += 1) {
+                        Index block_idx = i >> 2;
+                        Index bits_shift = (i & 3) << 1;
+                        uint8_t bits = (uint8_t)0b11 << bits_shift;
+                        uint8_t block = *(base_src_ptr + block_idx);
+                        uint8_t val = (block & bits) >> bits_shift;
+                        *dst_ptr = val;
+                    }
+                    out = Variant(arr);
+                    break;
+                }
+                case U4: {
+                    PackedByteArray arr;
+                    arr.resize(p_field_data.fixed_len);
+                    uint8_t* dst_ptr =  arr.ptrw();
+                    uint8_t* base_src_ptr = p_field_data.get_elem_ptr_cast<uint8_t>(0);
+                    for (Index i = 0; i < p_field_data.fixed_len; i += 1, dst_ptr += 1) {
+                        Index block_idx = i >> 1;
+                        Index bits_shift = (i & 1) << 2;
+                        uint8_t bits = (uint8_t)0b1111 << bits_shift;
+                        uint8_t block = *(base_src_ptr + block_idx);
+                        uint8_t val = (block & bits) >> bits_shift;
+                        *dst_ptr = val;
+                    }
+                    out = Variant(arr);
+                    break;
+                }
+                case BOOL: [[fallthrough]];
+                case U8: {
+                    PackedByteArray arr;
+                    arr.resize(p_field_data.fixed_len);
+                    void* dst_ptr = ptrcast(void*, arr.ptrw());
+                    void* src_ptr = p_field_data.get_elem_ptr_opaque(p_id_parts.get_idx());
+                    memcpy(dst_ptr, src_ptr, p_field_data.fixed_len);
+                    out = Variant(arr);
+                    break;
+                }
+                case I8: {
+                    PackedInt32Array arr;
+                    arr.resize(p_field_data.fixed_len);
+                    int32_t* dst_ptr = arr.ptrw();
+                    int8_t* src_ptr = p_field_data.get_elem_ptr_cast<int8_t>(p_id_parts.get_idx());
+                    for (Index i = 0; i < p_field_data.fixed_len; i += 1, dst_ptr += 1, src_ptr += 1) {
+                        *dst_ptr = static_cast<int32_t>(*src_ptr);
+                    }
+                    out = Variant(arr);
+                    break;
+                }
+                case U16: {
+                    PackedInt32Array arr;
+                    arr.resize(p_field_data.fixed_len);
+                    int32_t* dst_ptr = arr.ptrw();
+                    uint16_t* src_ptr = p_field_data.get_elem_ptr_cast<uint16_t>(p_id_parts.get_idx());
+                    for (Index i = 0; i < p_field_data.fixed_len; i += 1, dst_ptr += 1, src_ptr += 1) {
+                        *dst_ptr = static_cast<int32_t>(*src_ptr);
+                    }
+                    out = Variant(arr);
+                    break;
+                }
+                case I16: {
+                    PackedInt32Array arr;
+                    arr.resize(p_field_data.fixed_len);
+                    int32_t* dst_ptr = arr.ptrw();
+                    int16_t* src_ptr = p_field_data.get_elem_ptr_cast<int16_t>(p_id_parts.get_idx());
+                    for (Index i = 0; i < p_field_data.fixed_len; i += 1, dst_ptr += 1, src_ptr += 1) {
+                        *dst_ptr = static_cast<int32_t>(*src_ptr);
+                    }
+                    out = Variant(arr);
+                    break;
+                }
+                case U32: {
+                    PackedInt64Array arr;
+                    arr.resize(p_field_data.fixed_len);
+                    int64_t* dst_ptr = arr.ptrw();
+                    uint32_t* src_ptr = p_field_data.get_elem_ptr_cast<uint32_t>(p_id_parts.get_idx());
+                    for (Index i = 0; i < p_field_data.fixed_len; i += 1, dst_ptr += 1, src_ptr += 1) {
+                        *dst_ptr = static_cast<int64_t>(*src_ptr);
+                    }
+                    out = Variant(arr);
+                    break;
+                }
+                case I32: {
+                    PackedInt32Array arr;
+                    arr.resize(p_field_data.fixed_len);
+                    void* dst_ptr = ptrcast(void*, arr.ptrw());
+                    void* src_ptr = p_field_data.get_elem_ptr_opaque(p_id_parts.get_idx());
+                    memcpy(dst_ptr, src_ptr, p_field_data.fixed_len * 4);
+                    out = Variant(arr);
+                    break;
+                }
+                case ENTITY_ID: [[fallthrough]];
+                case I64: [[fallthrough]];
+                case U64: {
+                    PackedInt64Array arr;
+                    arr.resize(p_field_data.fixed_len);
+                    void* dst_ptr = ptrcast(void*, arr.ptrw());
+                    void* src_ptr = p_field_data.get_elem_ptr_opaque(p_id_parts.get_idx());
+                    memcpy(dst_ptr, src_ptr, p_field_data.fixed_len * 8);
+                    out = Variant(arr);
+                    break;
+                }
+                case F16: {
+                    PackedFloat32Array arr;
+                    arr.resize(p_field_data.fixed_len);
+                    float* dst_ptr = arr.ptrw();
+                    uint16_t* src_ptr = p_field_data.get_elem_ptr_cast<uint16_t>(p_id_parts.get_idx());
+                    for (Index i = 0; i < p_field_data.fixed_len; i += 1, dst_ptr += 1, src_ptr += 1) {
+                        *dst_ptr = half_to_float(*src_ptr);
+                    }
+                    out = Variant(arr);
+                    break;
+                }
+                case F32: {
+                    PackedFloat32Array arr;
+                    arr.resize(p_field_data.fixed_len);
+                    void* dst_ptr = ptrcast(void*, arr.ptrw());
+                    void* src_ptr = p_field_data.get_elem_ptr_opaque(p_id_parts.get_idx());
+                    memcpy(dst_ptr, src_ptr, p_field_data.fixed_len * 4);
+                    out = Variant(arr);
+                    break;
+                }
+                case F64: {
+                    PackedFloat64Array arr;
+                    arr.resize(p_field_data.fixed_len);
+                    void* dst_ptr = ptrcast(void*, arr.ptrw());
+                    void* src_ptr = p_field_data.get_elem_ptr_opaque(p_id_parts.get_idx());
+                    memcpy(dst_ptr, src_ptr, p_field_data.fixed_len * 8);
+                    out = Variant(arr);
+                    break;
+                }
+                case VARIANT: {
+                    Array arr;
+                    arr.reserve(p_field_data.fixed_len);
+                    Variant* src_ptr = p_field_data.get_elem_ptr_cast<Variant>(p_id_parts.get_idx());
+                    for (int i = 0; i < p_field_data.fixed_len; i += 1, src_ptr += 1) {
+                        arr.append(*src_ptr);
+                    }
+                    out = Variant(arr);
+                    break;
+                }
+                default: ERR_FAIL_V_MSG(Variant(), "Invalid `elem_t` type in entity manager");
+            }
+        } else {// array of structs
+            switch (p_field_data.struct_t) {
+                read_fixed_len_array_struct_all_elem_pairs(VEC_2, STRUCT_ELEM_COUNTS[VEC_2], Array, Vector2i, int32_t, 4, PackedVector2Array, Vector2, real_t, sizeof(real_t))
+                read_fixed_len_array_struct_all_elem_pairs(VEC_3, STRUCT_ELEM_COUNTS[VEC_3], Array, Vector3i, int32_t, 4, PackedVector3Array, Vector3, real_t, sizeof(real_t))
+                read_fixed_len_array_struct_all_elem_pairs(VEC_4, STRUCT_ELEM_COUNTS[VEC_4], Array, Vector4i, int32_t, 4, PackedVector4Array, Vector4, real_t, sizeof(real_t))
+                read_fixed_len_array_struct_all_elem_pairs(COLOR_3, STRUCT_ELEM_COUNTS[COLOR_3], PackedColorArray, Color, float, sizeof(float), PackedColorArray, Color, float, sizeof(float))
+                read_fixed_len_array_struct_all_elem_pairs(COLOR_4, STRUCT_ELEM_COUNTS[COLOR_4], PackedColorArray, Color, float, sizeof(float), PackedColorArray, Color, float, sizeof(float))
+                read_fixed_len_array_struct_all_elem_pairs(RECT_2, STRUCT_ELEM_COUNTS[RECT_2], Array, Rect2i, int32_t, 4, Array, Rect2, real_t, sizeof(real_t))
+                read_fixed_len_array_struct_all_elem_pairs(TRANSFORM_2D, STRUCT_ELEM_COUNTS[TRANSFORM_2D], Array, Transform2D, real_t, sizeof(real_t), Array, Transform2D, real_t, sizeof(real_t))
+                read_fixed_len_array_struct_all_elem_pairs(PLANE, STRUCT_ELEM_COUNTS[PLANE], Array, Plane, real_t, sizeof(real_t), Array, Plane, real_t, sizeof(real_t))
+                read_fixed_len_array_struct_all_elem_pairs(QUATERNION, STRUCT_ELEM_COUNTS[QUATERNION], Array, Quaternion, real_t, sizeof(real_t), Array, Quaternion, real_t, sizeof(real_t))
+                read_fixed_len_array_struct_all_elem_pairs(AABB, STRUCT_ELEM_COUNTS[AABB], Array, ::AABB, real_t, sizeof(real_t), Array, ::AABB, real_t, sizeof(real_t))
+                read_fixed_len_array_struct_all_elem_pairs(TRANSFORM_3D, STRUCT_ELEM_COUNTS[TRANSFORM_3D], Array, Transform3D, real_t, sizeof(real_t), Array, Transform3D, real_t, sizeof(real_t))
+                read_fixed_len_array_struct_all_elem_pairs(PROJECTION, STRUCT_ELEM_COUNTS[PROJECTION], Array, Projection, real_t, sizeof(real_t), Array, Projection, real_t, sizeof(real_t))
+                read_fixed_len_array_struct_all_elem_pairs(BASIS, STRUCT_ELEM_COUNTS[BASIS], Array, Basis, real_t, sizeof(real_t), Array, Basis, real_t, sizeof(real_t))
+                default: ERR_FAIL_V_MSG(Variant(), "internal error: invalid struct type in entity manager");
+            }
+        }
+    } else {
+        if (p_field_data.struct_t == NONE) { // single val
+            switch (p_field_data.elem_t) {
+                read_single_bits(U1, int64_t, 0b1, 1, 3, 7)
+                read_single_bits(U2, int64_t, 0b11, 2, 2, 3)
+                read_single_bits(U4, int64_t, 0b1111, 4, 1, 1)
+                // CHECKPOINT //FIXME
+                case BOOL: [[fallthrough]];
+                case U8: {
+                    PackedByteArray arr;
+                    arr.resize(p_field_data.fixed_len);
+                    void* dst_ptr = ptrcast(void*, arr.ptrw());
+                    void* src_ptr = p_field_data.get_elem_ptr_opaque(p_id_parts.get_idx());
+                    memcpy(dst_ptr, src_ptr, p_field_data.fixed_len);
+                    out = Variant(arr);
+                    break;
+                }
+                case I8: {
+                    PackedInt32Array arr;
+                    arr.resize(p_field_data.fixed_len);
+                    int32_t* dst_ptr = arr.ptrw();
+                    int8_t* src_ptr = p_field_data.get_elem_ptr_cast<int8_t>(p_id_parts.get_idx());
+                    for (Index i = 0; i < p_field_data.fixed_len; i += 1, dst_ptr += 1, src_ptr += 1) {
+                        *dst_ptr = static_cast<int32_t>(*src_ptr);
+                    }
+                    out = Variant(arr);
+                    break;
+                }
+                case U16: {
+                    PackedInt32Array arr;
+                    arr.resize(p_field_data.fixed_len);
+                    int32_t* dst_ptr = arr.ptrw();
+                    uint16_t* src_ptr = p_field_data.get_elem_ptr_cast<uint16_t>(p_id_parts.get_idx());
+                    for (Index i = 0; i < p_field_data.fixed_len; i += 1, dst_ptr += 1, src_ptr += 1) {
+                        *dst_ptr = static_cast<int32_t>(*src_ptr);
+                    }
+                    out = Variant(arr);
+                    break;
+                }
+                case I16: {
+                    PackedInt32Array arr;
+                    arr.resize(p_field_data.fixed_len);
+                    int32_t* dst_ptr = arr.ptrw();
+                    int16_t* src_ptr = p_field_data.get_elem_ptr_cast<int16_t>(p_id_parts.get_idx());
+                    for (Index i = 0; i < p_field_data.fixed_len; i += 1, dst_ptr += 1, src_ptr += 1) {
+                        *dst_ptr = static_cast<int32_t>(*src_ptr);
+                    }
+                    out = Variant(arr);
+                    break;
+                }
+                case U32: {
+                    PackedInt64Array arr;
+                    arr.resize(p_field_data.fixed_len);
+                    int64_t* dst_ptr = arr.ptrw();
+                    uint32_t* src_ptr = p_field_data.get_elem_ptr_cast<uint32_t>(p_id_parts.get_idx());
+                    for (Index i = 0; i < p_field_data.fixed_len; i += 1, dst_ptr += 1, src_ptr += 1) {
+                        *dst_ptr = static_cast<int64_t>(*src_ptr);
+                    }
+                    out = Variant(arr);
+                    break;
+                }
+                case I32: {
+                    PackedInt32Array arr;
+                    arr.resize(p_field_data.fixed_len);
+                    void* dst_ptr = ptrcast(void*, arr.ptrw());
+                    void* src_ptr = p_field_data.get_elem_ptr_opaque(p_id_parts.get_idx());
+                    memcpy(dst_ptr, src_ptr, p_field_data.fixed_len * 4);
+                    out = Variant(arr);
+                    break;
+                }
+                case ENTITY_ID: [[fallthrough]];
+                case I64: [[fallthrough]];
+                case U64: {
+                    PackedInt64Array arr;
+                    arr.resize(p_field_data.fixed_len);
+                    void* dst_ptr = ptrcast(void*, arr.ptrw());
+                    void* src_ptr = p_field_data.get_elem_ptr_opaque(p_id_parts.get_idx());
+                    memcpy(dst_ptr, src_ptr, p_field_data.fixed_len * 8);
+                    out = Variant(arr);
+                    break;
+                }
+                case F16: {
+                    PackedFloat32Array arr;
+                    arr.resize(p_field_data.fixed_len);
+                    float* dst_ptr = arr.ptrw();
+                    uint16_t* src_ptr = p_field_data.get_elem_ptr_cast<uint16_t>(p_id_parts.get_idx());
+                    for (Index i = 0; i < p_field_data.fixed_len; i += 1, dst_ptr += 1, src_ptr += 1) {
+                        *dst_ptr = half_to_float(*src_ptr);
+                    }
+                    out = Variant(arr);
+                    break;
+                }
+                case F32: {
+                    PackedFloat32Array arr;
+                    arr.resize(p_field_data.fixed_len);
+                    void* dst_ptr = ptrcast(void*, arr.ptrw());
+                    void* src_ptr = p_field_data.get_elem_ptr_opaque(p_id_parts.get_idx());
+                    memcpy(dst_ptr, src_ptr, p_field_data.fixed_len * 4);
+                    out = Variant(arr);
+                    break;
+                }
+                case F64: {
+                    PackedFloat64Array arr;
+                    arr.resize(p_field_data.fixed_len);
+                    void* dst_ptr = ptrcast(void*, arr.ptrw());
+                    void* src_ptr = p_field_data.get_elem_ptr_opaque(p_id_parts.get_idx());
+                    memcpy(dst_ptr, src_ptr, p_field_data.fixed_len * 8);
+                    out = Variant(arr);
+                    break;
+                }
+                case VARIANT: {
+                    Array arr;
+                    arr.reserve(p_field_data.fixed_len);
+                    Variant* src_ptr = p_field_data.get_elem_ptr_cast<Variant>(p_id_parts.get_idx());
+                    for (int i = 0; i < p_field_data.fixed_len; i += 1, src_ptr += 1) {
+                        arr.append(*src_ptr);
+                    }
+                    out = Variant(arr);
+                    break;
+                }
+                default: ERR_FAIL_V_MSG(Variant(), "Invalid `elem_t` type in entity manager");
+            }
+        } else {// fixed-len and struct
+
+        }
+    }
+    return out;
 }
 
 Variant EntityManager::get(Id p_id, FieldIndex p_field_index) const {

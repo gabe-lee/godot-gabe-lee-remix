@@ -126,12 +126,30 @@ private:
             struct_t = p_struct_t;
             fixed_len = MAX((TFixed)1, p_fixed_len);
             stride = static_cast<Size>(ELEM_SIZES[p_elem_t]) * static_cast<Size>(STRUCT_ELEM_COUNTS[p_struct_t]) * static_cast<Size>(fixed_len);
+            switch (p_elem_t) {
+                case U1: {
+                    stride = (stride + 7) & ~7;
+                    stride <<= 3;
+                }
+                case U2: {
+                    stride = (stride + 7) & ~7;
+                    stride <<= 2;
+                }
+                case U4: {
+                    stride = (stride + 7) & ~7;
+                    stride <<= 1;
+                }
+                default: break;
+            }
             sub_shift = ELEM_SUB_SHIFTS[elem_t];
         }
 
         template <typename T>
         _FORCE_INLINE_ T* get_elem_ptr_cast(Index index) {
             return reinterpret_cast<T*>(reinterpret_cast<uint8_t*>(data_ptr) + (index * stride));
+        }
+        _FORCE_INLINE_ void* get_elem_ptr_opaque(Index index) {
+            return reinterpret_cast<void*>(reinterpret_cast<uint8_t*>(data_ptr) + (index * stride));
         }
 
         _FORCE_INLINE_ void realloc(Size new_cap) {
@@ -334,7 +352,6 @@ private:
     _FORCE_INLINE_ void set_allowed_type_id(FieldIndex p_field_idx, int64_t p_allowed);
     _FORCE_INLINE_ bool type_id_is_allowed_in_field(FieldIndex p_field_idx, TypeIndex p_type_idx);
     _FORCE_INLINE_ bool invalid_id_data(IdData p_id_data);
-    _FORCE_INLINE_ void* get_elem_ptr(FieldIndex p_field_idx_abs, Size p_index);
     IdData claim_first_free(TypeIndex p_type_idx, TypeData p_field_ranges);
     IdData claim_next_unused(TypeIndex p_type_idx, TypeData p_field_ranges);
     void destroy_entity_list_memory(TypeIndex p_type);
@@ -359,8 +376,11 @@ public:
     bool set(Id p_id, FieldIndex p_field_index, Variant p_val);
     bool set_gdscript(int64_t p_id_gdscript, FieldIndex p_field_index, Variant p_val);
     Id create(TypeIndex p_type);
+    int64_t create_gdscript(TypeIndex p_type);
     bool destroy(Id p_id);
+    bool destroy_gdscript(int64_t p_id_gdscript);
     bool entity_exists(Id p_id) const;
+    bool entity_exists_gdscript(int64_t p_id_gdscript) const;
     // Init process
     void define_system(TypeIndex p_total_num_types);
     void define_type(TypeIndex p_type_idx, FieldIndex p_num_fields);
