@@ -119,29 +119,12 @@ private:
         TElem elem_t = 0;
         TStruct struct_t = 0;
         TFixed fixed_len = 0;
-        TShift sub_shift = 0;
 
         _FORCE_INLINE_ void set_field_type(TElem p_elem_t, TStruct p_struct_t, TFixed p_fixed_len) {
             elem_t = p_elem_t;
             struct_t = p_struct_t;
             fixed_len = MAX((TFixed)1, p_fixed_len);
             stride = static_cast<Size>(ELEM_SIZES[p_elem_t]) * static_cast<Size>(STRUCT_ELEM_COUNTS[p_struct_t]) * static_cast<Size>(fixed_len);
-            switch (p_elem_t) {
-                case U1: {
-                    stride = (stride + 7) & ~7;
-                    stride <<= 3;
-                }
-                case U2: {
-                    stride = (stride + 7) & ~7;
-                    stride <<= 2;
-                }
-                case U4: {
-                    stride = (stride + 7) & ~7;
-                    stride <<= 1;
-                }
-                default: break;
-            }
-            sub_shift = ELEM_SUB_SHIFTS[elem_t];
         }
 
         template <typename T>
@@ -150,6 +133,9 @@ private:
         }
         _FORCE_INLINE_ void* get_elem_ptr_opaque(Index index) {
             return reinterpret_cast<void*>(reinterpret_cast<uint8_t*>(data_ptr) + (index * stride));
+        }
+        _FORCE_INLINE_ uint8_t* get_elem_base_ptr_u8() {
+            return reinterpret_cast<uint8_t*>(data_ptr);
         }
 
         _FORCE_INLINE_ void realloc(Size new_cap) {
@@ -172,9 +158,6 @@ public:
     enum ELEM {
         NONE = 0,
         BOOL = 1,
-        U1,
-        U2,
-        U4,
         U8,
         I8,
         U16,
@@ -260,9 +243,6 @@ private:
     constexpr static const Size ELEM_SIZES[NUM_ELEM_TYPES] = {
         0, // NONE
         1, // BOOL
-        1, // U1
-        1, // U2
-        1, // U4
         1, // U8
         1, // I8
         2, // U16
@@ -272,30 +252,10 @@ private:
         8, // U64
         8, // I64
         2, // F16
-        4, // F32
-        8, // F64
+        sizeof(float), // F32
+        sizeof(double), // F64
         sizeof(Variant), // VARIANT
         sizeof(int64_t), // ENTITY_ID
-    };
-    constexpr static const Size ELEM_SUB_SHIFTS[NUM_ELEM_TYPES] = {
-        0, // NONE
-        0, // BOOL
-        3, // U1
-        2, // U2
-        1, // U4
-        0, // U8
-        0, // I8
-        0, // U16
-        0, // I16
-        0, // U32
-        0, // I32
-        0, // U64
-        0, // I64
-        0, // F16
-        0, // F32
-        0, // F64
-        0, // VARIANT
-        0, // ENTITY_ID
     };
     constexpr static const Size STRUCT_ELEM_COUNTS[NUM_STRUCT_TYPES] = {
         1, // NONE
@@ -320,19 +280,13 @@ private:
         return p_elem_t == BOOL;
     }
     _FORCE_INLINE_ static bool is_int(TElem p_elem_t) {
-        return p_elem_t >= U1 && p_elem_t <= I64;
-    }
-    _FORCE_INLINE_ static bool is_sub_int(TElem p_elem_t) {
-        return p_elem_t >= U1 && p_elem_t <= U4;
-    }
-    _FORCE_INLINE_ static bool is_whole_int(TElem p_elem_t) {
         return p_elem_t >= U8 && p_elem_t <= I64;
     }
     _FORCE_INLINE_ static bool is_float(TElem p_elem_t) {
         return p_elem_t >= F16 && p_elem_t <= F64;
     }
     _FORCE_INLINE_ static bool elem_is_numeric(TElem p_elem_t) {
-        return p_elem_t >= U1 && p_elem_t <= F64;
+        return p_elem_t >= U8 && p_elem_t <= F64;
     }
     
     IdData* id_data = nullptr;
@@ -358,8 +312,10 @@ private:
     void destroy_internal(Index p_id_index, IdData p_id_data, TypeData p_type_data);
     IdAndIdData create_internal(TypeIndex p_type_idx, TypeData p_type_data);
     ExistsAndIdData entity_exists_internal(IdParts p_id_parts, bool ignore_gen = false) const;
-    Variant get_internal(IdData p_id_parts, TypeData p_type_data,FieldIndex p_field_index, FieldData p_field_data);
+    Variant get_internal(IdData p_id_parts, TypeData p_type_data,FieldIndex p_field_index, FieldData p_field_data) const;
+    Variant get_internal_from_array(IdData p_id_parts, TypeData p_type_data,FieldIndex p_field_index, FieldData p_field_data, Index p_sub_idx) const;
     bool set_internal(IdData p_id_parts, TypeData p_type_data, FieldIndex p_field_index, FieldData p_field_data, Variant val);
+    bool set_internal_in_array(IdData p_id_parts, TypeData p_type_data, FieldIndex p_field_index, FieldData p_field_data, Index p_sub_idx, Variant val);
     void ensure_capacity_for_n_entities_internal(TypeData* p_type_data, Size p_count);
     void ensure_capacity_for_n_ids_internal(Size p_count);
     void define_field_internal(TypeIndex p_type_idx, FieldIndex p_field_idx, TElem p_elem_t, TStruct p_struct_t, TFixed p_fixed_len, bool p_has_allowed_ids, PackedInt32Array p_allowed_ids);
@@ -373,8 +329,12 @@ public:
 	void ensure_capacity_for_n_entities(TypeIndex p_type_index, Size p_count);
     Variant get(Id p_id, FieldIndex p_field_index) const;
     Variant get_gdscript(int64_t p_id_gdscript, FieldIndex p_field_index) const;
+    Variant get_one_from_array(Id p_id, FieldIndex p_field_index, Index p_sub_idx) const;
+    Variant get_one_from_array_gdscript(int64_t p_id_gdscript, FieldIndex p_field_index, Index p_sub_idx) const;
     bool set(Id p_id, FieldIndex p_field_index, Variant p_val);
     bool set_gdscript(int64_t p_id_gdscript, FieldIndex p_field_index, Variant p_val);
+    bool set_one_in_array(Id p_id, FieldIndex p_field_index, Index p_sub_idx, Variant p_val);
+    bool set_one_in_array_gdscript(int64_t p_id_gdscript, FieldIndex p_field_index, Index p_sub_idx, Variant p_val);
     Id create(TypeIndex p_type);
     int64_t create_gdscript(TypeIndex p_type);
     bool destroy(Id p_id);
