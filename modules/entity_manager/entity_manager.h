@@ -5,6 +5,7 @@
 #include "core/object/ref_counted.h"
 #include "core/typedefs.h"
 #include "core/variant/dictionary.h"
+#include "core/variant/type_info.h"
 #include "core/variant/variant.h"
 #include <cstdint>
 
@@ -114,32 +115,36 @@ private:
     class FieldData {
     public:
         void* data_ptr = nullptr;
-        Size stride = 0;
+        Size full_stride = 0;
+        Size struct_stride = 0;
         Index allowed_id_list_index = 0;
         TElem elem_t = 0;
         TStruct struct_t = 0;
+        TFixed struct_elem_count = 0;
         TFixed fixed_len = 0;
 
         _FORCE_INLINE_ void set_field_type(TElem p_elem_t, TStruct p_struct_t, TFixed p_fixed_len) {
             elem_t = p_elem_t;
             struct_t = p_struct_t;
+            struct_elem_count = STRUCT_ELEM_COUNTS[struct_t];
             fixed_len = MAX((TFixed)1, p_fixed_len);
-            stride = static_cast<Size>(ELEM_SIZES[p_elem_t]) * static_cast<Size>(STRUCT_ELEM_COUNTS[p_struct_t]) * static_cast<Size>(fixed_len);
+            struct_stride = static_cast<Size>(ELEM_SIZES[p_elem_t]) * static_cast<Size>(STRUCT_ELEM_COUNTS[p_struct_t]);
+            full_stride = struct_stride * static_cast<Size>(fixed_len);
         }
 
         template <typename T>
         _FORCE_INLINE_ T* get_elem_ptr_cast(Index index) {
-            return reinterpret_cast<T*>(reinterpret_cast<uint8_t*>(data_ptr) + (index * stride));
+            return reinterpret_cast<T*>(reinterpret_cast<uint8_t*>(data_ptr) + (index * full_stride));
         }
         _FORCE_INLINE_ void* get_elem_ptr_opaque(Index index) {
-            return reinterpret_cast<void*>(reinterpret_cast<uint8_t*>(data_ptr) + (index * stride));
+            return reinterpret_cast<void*>(reinterpret_cast<uint8_t*>(data_ptr) + (index * full_stride));
         }
         _FORCE_INLINE_ uint8_t* get_elem_base_ptr_u8() {
             return reinterpret_cast<uint8_t*>(data_ptr);
         }
 
         _FORCE_INLINE_ void realloc(Size new_cap) {
-            uint32_t total = new_cap * stride;
+            uint32_t total = new_cap * full_stride;
             data_ptr = memrealloc(data_ptr, total);
             CRASH_COND_MSG(!data_ptr, "Out of memory");
         }
@@ -176,6 +181,7 @@ public:
         FLOAT = F64,
     };
     enum STRUCT {
+        SINGLE_VAL = 0,
         VEC_2 = 1,
         VEC_3,
         VEC_4,
@@ -303,8 +309,8 @@ private:
     uint8_t elem_grow_mode = GROW_QUARTER;
     uint8_t init_status = UNINIT;
 
-    _FORCE_INLINE_ void set_allowed_type_id(FieldIndex p_field_idx, int64_t p_allowed);
-    _FORCE_INLINE_ bool type_id_is_allowed_in_field(FieldIndex p_field_idx, TypeIndex p_type_idx);
+    _FORCE_INLINE_ void set_allowed_type_id(FieldIndex p_allowed_block_offset, TypeIndex p_type_idx);
+    _FORCE_INLINE_ bool type_id_is_allowed_in_field(FieldIndex p_allowed_block_offset, TypeIndex p_type_idx);
     _FORCE_INLINE_ bool invalid_id_data(IdData p_id_data);
     IdData claim_first_free(TypeIndex p_type_idx, TypeData p_field_ranges);
     IdData claim_next_unused(TypeIndex p_type_idx, TypeData p_field_ranges);
@@ -342,17 +348,20 @@ public:
     bool entity_exists(Id p_id) const;
     bool entity_exists_gdscript(int64_t p_id_gdscript) const;
     // Init process
-    void define_system(TypeIndex p_total_num_types);
+    void define_manager(TypeIndex p_total_num_types);
     void define_type(TypeIndex p_type_idx, FieldIndex p_num_fields);
     void define_field(TypeIndex p_type_idx, FieldIndex p_field_idx, TElem p_elem);
     void define_entity_id_field(TypeIndex p_type_idx, FieldIndex p_field_idx, PackedInt32Array p_allowed_fields);
-    void define_struct_field(TypeIndex p_type_idx, FieldIndex p_field_idx, TElem p_elem, TStruct p_struct);
+    void define_struct_field(TypeIndex p_type_idx, FieldIndex p_field_idx, TStruct p_struct, TElem p_elem);
     void define_fixed_length_array_field(TypeIndex p_type_idx, FieldIndex p_field_idx, TElem p_elem, TFixed p_fixed);
     void define_fixed_length_entity_id_array_field(TypeIndex p_type_idx, FieldIndex p_field_idx, TFixed p_fixed, PackedInt32Array p_allowed_fields);
-    void define_fixed_length_struct_array_field(TypeIndex p_type_idx, FieldIndex p_field_idx, TElem p_elem, TStruct p_struct, TFixed p_fixed);
-    void finalize_entity_system_layout();
+    void define_fixed_length_struct_array_field(TypeIndex p_type_idx, FieldIndex p_field_idx, TStruct p_struct, TElem p_elem, TFixed p_fixed);
+    void finalize_entity_manager_layout();
 
     EntityManager();
     ~EntityManager();
 };
 
+VARIANT_ENUM_CAST(EntityManager::ELEM);
+VARIANT_ENUM_CAST(EntityManager::STRUCT);
+VARIANT_ENUM_CAST(EntityManager::GROW);

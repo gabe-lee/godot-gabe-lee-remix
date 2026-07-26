@@ -12,6 +12,7 @@
 #include "core/math/rect2i.h"
 #include "core/math/vector2.h"
 #include "core/math/vector2i.h"
+#include "core/object/class_db.h"
 #include "core/os/memory.h"
 #include "core/typedefs.h"
 #include "core/variant/array.h"
@@ -22,7 +23,66 @@
 
 void EntityManager::_bind_methods() {
     // bind gdscript visible methods here
-    // ClassDB::bind_method(D_METHOD(add, a, b), &EntitySystem::add);
+    BIND_ENUM_CONSTANT(NONE);
+    BIND_ENUM_CONSTANT(BOOL);
+    BIND_ENUM_CONSTANT(U8);
+    BIND_ENUM_CONSTANT(I8);
+    BIND_ENUM_CONSTANT(U16);
+    BIND_ENUM_CONSTANT(I16);
+    BIND_ENUM_CONSTANT(U32);
+    BIND_ENUM_CONSTANT(I32);
+    BIND_ENUM_CONSTANT(U64);
+    BIND_ENUM_CONSTANT(I64);
+    BIND_ENUM_CONSTANT(F16);
+    BIND_ENUM_CONSTANT(F32);
+    BIND_ENUM_CONSTANT(F64);
+    BIND_ENUM_CONSTANT(FLOAT);
+    BIND_ENUM_CONSTANT(INT);
+    BIND_ENUM_CONSTANT(ENTITY_ID);
+    BIND_ENUM_CONSTANT(VARIANT);
+    BIND_ENUM_CONSTANT(BYTE);
+    BIND_ENUM_CONSTANT(SINGLE_VAL);
+    BIND_ENUM_CONSTANT(VEC_2);
+    BIND_ENUM_CONSTANT(VEC_3);
+    BIND_ENUM_CONSTANT(VEC_4);
+    BIND_ENUM_CONSTANT(COLOR_3);
+    BIND_ENUM_CONSTANT(COLOR_4);
+    BIND_ENUM_CONSTANT(RECT_2);
+    BIND_ENUM_CONSTANT(TRANSFORM_2D);
+    BIND_ENUM_CONSTANT(PLANE);
+    BIND_ENUM_CONSTANT(QUATERNION);
+    BIND_ENUM_CONSTANT(AABB);
+    BIND_ENUM_CONSTANT(TRANSFORM_3D);
+    BIND_ENUM_CONSTANT(PROJECTION);
+    BIND_ENUM_CONSTANT(BASIS);
+    BIND_ENUM_CONSTANT(RECT_3);
+    BIND_ENUM_CONSTANT(GROW_EXACT);
+    BIND_ENUM_CONSTANT(GROW_QUARTER);
+    BIND_ENUM_CONSTANT(GROW_HALF);
+    BIND_ENUM_CONSTANT(GROW_DOUBLE);
+    ClassDB::bind_method(D_METHOD("clear_entity_list", "entity_type"), &EntityManager::clear_entity_list);
+    ClassDB::bind_method(D_METHOD("destroy_entity_manager"), &EntityManager::destroy_entity_manager);
+    ClassDB::bind_method(D_METHOD("entity_list_is_empty", "entity_type"), &EntityManager::entity_list_is_empty);
+    ClassDB::bind_method(D_METHOD("entity_list_not_empty", "entity_type"), &EntityManager::entity_list_not_empty);
+    ClassDB::bind_method(D_METHOD("get_entity_list_cap", "entity_type"), &EntityManager::get_entity_list_cap);
+    ClassDB::bind_method(D_METHOD("get_entity_list_len", "entity_type"), &EntityManager::get_entity_list_len);
+    ClassDB::bind_method(D_METHOD("ensure_capacity_for_n_entities", "entity_type", "count"), &EntityManager::ensure_capacity_for_n_entities);
+    ClassDB::bind_method(D_METHOD("get", "entity_id", "entity_field"), &EntityManager::get_gdscript);
+    ClassDB::bind_method(D_METHOD("get_one_from_fixed_array", "entity_id", "entity_field", "array_idx"), &EntityManager::get_one_from_array_gdscript);
+    ClassDB::bind_method(D_METHOD("set", "entity_id", "entity_field", "value"), &EntityManager::set_gdscript);
+    ClassDB::bind_method(D_METHOD("set_one_in_fixed_array", "entity_id", "entity_field", "array_idx", "value"), &EntityManager::set_one_in_array_gdscript);
+    ClassDB::bind_method(D_METHOD("create_entity", "entity_type"), &EntityManager::create_gdscript);
+    ClassDB::bind_method(D_METHOD("destroy_entity", "entity_id"), &EntityManager::destroy_gdscript);
+    ClassDB::bind_method(D_METHOD("entity_exists", "entity_id"), &EntityManager::entity_exists_gdscript);
+    ClassDB::bind_method(D_METHOD("define_manager", "total_num_entity_types"), &EntityManager::define_manager);
+    ClassDB::bind_method(D_METHOD("define_type", "entity_type", "num_fields_for_entity_type"), &EntityManager::define_type);
+    ClassDB::bind_method(D_METHOD("define_field", "entity_type", "field_index", "element_type"), &EntityManager::define_field);
+    ClassDB::bind_method(D_METHOD("define_entity_id_field", "entity_type", "field_index", "allowed_entity_types_for_entity_ids"), &EntityManager::define_entity_id_field);
+    ClassDB::bind_method(D_METHOD("define_struct_field", "entity_type", "field_index", "struct_type", "element_type"), &EntityManager::define_struct_field);
+    ClassDB::bind_method(D_METHOD("define_fixed_length_array_field", "entity_type", "field_index", "element_type", "fixed_length"), &EntityManager::define_fixed_length_array_field);
+    ClassDB::bind_method(D_METHOD("define_fixed_length_entity_id_array_field", "entity_type", "field_index", "fixed_length", "allowed_entity_types_for_entity_ids"), &EntityManager::define_fixed_length_entity_id_array_field);
+    ClassDB::bind_method(D_METHOD("define_fixed_length_struct_array_field", "entity_type", "field_index", "struct_type", "element_type", "fixed_length"), &EntityManager::define_fixed_length_struct_array_field);
+    ClassDB::bind_method(D_METHOD("finalize_entity_manager_layout"), &EntityManager::finalize_entity_manager_layout);
 }
 
 EntityManager::EntityManager() {
@@ -31,7 +91,6 @@ EntityManager::EntityManager() {
 EntityManager::~EntityManager() {
     destroy_entity_manager();
 }
-
 
 void EntityManager::ensure_capacity_for_n_entities_internal(TypeData* p_type_data, Size p_count) {
     TypeData td = *p_type_data;
@@ -58,6 +117,11 @@ void EntityManager::ensure_capacity_for_n_entities_internal(TypeData* p_type_dat
         }
         *p_type_data = td;
     }
+}
+void EntityManager::ensure_capacity_for_n_entities(TypeIndex p_type_idx, Size p_count) {
+    ERR_FAIL_COND_MSG(p_type_idx >= num_types, "type index out of bounds for total number of defined types");
+    TypeData* p_type_data = &type_data[p_type_idx];
+    ensure_capacity_for_n_entities_internal(p_type_data, p_count);
 }
 void EntityManager::ensure_capacity_for_n_ids_internal(Size p_count) {
     if (p_count > cap_ids) {
@@ -157,6 +221,10 @@ bool EntityManager::entity_exists(Id p_id) const {
     return entity_exists_internal(parts, false).exists;
 }
 
+bool EntityManager::entity_exists_gdscript(int64_t p_id) const {
+    return entity_exists(Id{p_id});
+}
+
 void EntityManager::destroy_internal(Index p_id_index, IdData p_id_data, TypeData p_type_data) {
     Index p_elem_index = p_id_data.get_idx();
     if (p_type_data.at_least_1_variant_field) {
@@ -165,7 +233,7 @@ void EntityManager::destroy_internal(Index p_id_index, IdData p_id_data, TypeDat
             if (p_field_data.elem_t == VARIANT) {
                 Variant* var_ptr = p_field_data.get_elem_ptr_cast<Variant>(p_elem_index);
                 var_ptr->~Variant();
-                *var_ptr = Variant();
+                memset((void*)var_ptr, 0, sizeof(Variant));
             }
         }
     }
@@ -181,6 +249,10 @@ bool EntityManager::destroy(Id p_id) {
     TypeData p_type_data = type_data[parts.index];
     destroy_internal(parts.index, id_if_exists.data, p_type_data);
     return true;
+}
+
+bool EntityManager::destroy_gdscript(int64_t p_id) {
+    return destroy(Id{p_id});
 }
 
 EntityManager::IdAndIdData EntityManager::create_internal(TypeIndex p_type_idx, TypeData p_type_data) {
@@ -213,6 +285,10 @@ EntityManager::Id EntityManager::create(TypeIndex p_type_idx) {
     ERR_FAIL_COND_V_MSG(p_type_idx >= num_types, Id{}, "type index is greater then the total number of types");
     TypeData p_type_data = type_data[p_type_idx];
     return create_internal(p_type_idx, p_type_data).id;
+}
+
+int64_t EntityManager::create_gdscript(TypeIndex p_type_idx) {
+    return create(p_type_idx).raw;
 }
 
 Variant EntityManager::get_internal(IdData p_id_data, TypeData p_type_data, FieldIndex p_field_index, FieldData p_field_data) const {
@@ -351,6 +427,7 @@ Variant EntityManager::get_internal_from_array(IdData p_id_data, TypeData p_type
                 Variant* src_ptr = p_field_data.get_elem_ptr_cast<Variant>(p_idx);
                 src_ptr += p_sub_idx;
                 out = *src_ptr;
+                break;
             }
             default: ERR_FAIL_V_MSG(Variant(), "Invalid `elem_t` type in entity manager");
         }
@@ -392,35 +469,182 @@ Variant EntityManager::get_one_from_array_gdscript(int64_t p_id_gdscript, FieldI
     return get_one_from_array(Id{p_id_gdscript}, p_field_index, p_sub_idx);
 }
 
-bool EntityManager::set_internal(IdData p_id_parts, TypeData p_type_data, FieldIndex p_field_index, FieldData p_field_data, Variant value) {
-    //TODO
+bool EntityManager::set_internal(IdData p_id_data, TypeData p_type_data, FieldIndex p_field_index, FieldData p_field_data, Variant value) {
+    Index p_idx = p_id_data.get_idx();
+    if (p_field_data.fixed_len > 1) {
+        if (p_field_data.struct_t == NONE) { // array of vals
+            switch (p_field_data.elem_t) {
+                case BOOL: [[fallthrough]];
+                write_array_of_vals_direct_packed_case(U8, PackedByteArray, uint8_t)
+                write_array_of_vals_packed_case(I8, PackedInt32Array, int32_t, false, int8_t, false)
+                write_array_of_vals_packed_case(U16, PackedInt32Array, int32_t, false, uint16_t, false)
+                write_array_of_vals_packed_case(I16, PackedInt32Array, int32_t, false, int16_t, false)
+                write_array_of_vals_packed_case(U32, PackedInt64Array, int64_t, false, uint32_t, false)
+                write_array_of_vals_direct_packed_case(I32, PackedInt32Array, int32_t)
+                case ENTITY_ID: [[fallthrough]];
+                case U64: [[fallthrough]]; // Variants can never hold integers greater than INT64_MAX, even if using U64 mode
+                write_array_of_vals_direct_packed_case(I64, PackedInt64Array, int64_t)
+                write_array_of_vals_packed_case(F16, PackedFloat32Array, float, false, uint16_t, true)
+                write_array_of_vals_direct_packed_case(F32, PackedFloat32Array, float)
+                write_array_of_vals_direct_packed_case(F64, PackedFloat64Array, double)
+                case VARIANT: {
+                    Array arr = (Array)value;
+                    Size size = arr.size(); \
+                    ERR_FAIL_COND_V_MSG(size > p_field_data.fixed_len, false, "provided array was larger than the defined fixed-len length for this field"); \
+                    Variant* dst_ptr = p_field_data.get_elem_ptr_cast<Variant>(p_id_data.get_idx());
+                    for (Size i = 0; i < size; i += 1, dst_ptr += 1) {
+                        *dst_ptr = arr[i];
+                    }
+                    break;
+                }
+                default: ERR_FAIL_V_MSG(Variant(), "Invalid `elem_t` type in entity manager");
+            }
+        } else { // array of structs
+            switch (p_field_data.struct_t) {
+                write_array_of_structs_all_elem_cases(VEC_2, STRUCT_ELEM_COUNTS[VEC_2], Array, Vector2i, int32_t, PackedVector2Array, Vector2, real_t)
+                write_array_of_structs_all_elem_cases(VEC_3, STRUCT_ELEM_COUNTS[VEC_3], Array, Vector3i, int32_t, PackedVector3Array, Vector3, real_t)
+                write_array_of_structs_all_elem_cases(VEC_4, STRUCT_ELEM_COUNTS[VEC_4], Array, Vector4i, int32_t, PackedVector4Array, Vector4, real_t)
+                write_array_of_structs_all_elem_cases(COLOR_3, STRUCT_ELEM_COUNTS[COLOR_3], PackedColorArray, Color, float, PackedColorArray, Color, float)
+                write_array_of_structs_all_elem_cases(COLOR_4, STRUCT_ELEM_COUNTS[COLOR_4], PackedColorArray, Color, float, PackedColorArray, Color, float)
+                write_array_of_structs_all_elem_cases(RECT_2, STRUCT_ELEM_COUNTS[RECT_2], Array, Rect2i, int32_t, Array, Rect2, real_t)
+                write_array_of_structs_all_elem_cases(TRANSFORM_2D, STRUCT_ELEM_COUNTS[TRANSFORM_2D], Array, Transform2D, real_t, Array, Transform2D, real_t)
+                write_array_of_structs_all_elem_cases(PLANE, STRUCT_ELEM_COUNTS[PLANE], Array, Plane, real_t, Array, Plane, real_t)
+                write_array_of_structs_all_elem_cases(QUATERNION, STRUCT_ELEM_COUNTS[QUATERNION], Array, Quaternion, real_t, Array, Quaternion, real_t)
+                write_array_of_structs_all_elem_cases(AABB, STRUCT_ELEM_COUNTS[AABB], Array, ::AABB, real_t, Array, ::AABB, real_t)
+                write_array_of_structs_all_elem_cases(TRANSFORM_3D, STRUCT_ELEM_COUNTS[TRANSFORM_3D], Array, Transform3D, real_t, Array, Transform3D, real_t)
+                write_array_of_structs_all_elem_cases(PROJECTION, STRUCT_ELEM_COUNTS[PROJECTION], Array, Projection, real_t, Array, Projection, real_t)
+                write_array_of_structs_all_elem_cases(BASIS, STRUCT_ELEM_COUNTS[BASIS], Array, Basis, real_t, Array, Basis, real_t)
+                default: ERR_FAIL_V_MSG(Variant(), "internal error: invalid struct type in entity manager");
+            }
+        }
+    } else {
+        if (p_field_data.struct_t == NONE) { // single val
+            switch (p_field_data.elem_t) {
+                case BOOL: [[fallthrough]];
+                write_single_val_case(U8, uint8_t, int64_t);
+                write_single_val_case(I8, int8_t, int64_t);
+                write_single_val_case(U16, uint16_t, int64_t);
+                write_single_val_case(I16, int16_t, int64_t);
+                write_single_val_case(U32, uint32_t, int64_t);
+                write_single_val_case(I32, int32_t, int64_t);
+                case ENTITY_ID: [[fallthrough]];
+                case U64: [[fallthrough]];
+                write_single_val_case(I64, int64_t, int64_t);
+                case F16: {
+                    *p_field_data.get_elem_ptr_cast<uint16_t>(p_idx) = float_to_half_u16((double)value);
+                    break; 
+                }
+                write_single_val_case(F32, float, double);
+                write_single_val_case(F64, double, double);
+                case VARIANT: {
+                    *p_field_data.get_elem_ptr_cast<Variant>(p_idx) = value;
+                    break;
+                }
+                default: ERR_FAIL_V_MSG(Variant(), "Invalid `elem_t` type in entity manager");
+            }
+        } else { // single struct
+            switch (p_field_data.struct_t) {
+                write_single_struct_all_elem_cases(VEC_2, STRUCT_ELEM_COUNTS[VEC_2], Vector2i, int32_t, Vector2, real_t)
+                write_single_struct_all_elem_cases(VEC_3, STRUCT_ELEM_COUNTS[VEC_3], Vector3i, int32_t, Vector3, real_t)
+                write_single_struct_all_elem_cases(VEC_4, STRUCT_ELEM_COUNTS[VEC_4], Vector4i, int32_t, Vector4, real_t)
+                write_single_struct_all_elem_cases(COLOR_3, STRUCT_ELEM_COUNTS[COLOR_3], Color, real_t, Color, real_t)
+                write_single_struct_all_elem_cases(COLOR_4, STRUCT_ELEM_COUNTS[COLOR_4], Color, real_t, Color, real_t)
+                write_single_struct_all_elem_cases(RECT_2, STRUCT_ELEM_COUNTS[RECT_2], Rect2i, int32_t, Rect2, real_t)
+                write_single_struct_all_elem_cases(TRANSFORM_2D, STRUCT_ELEM_COUNTS[TRANSFORM_2D], Transform2D, real_t, Transform2D, real_t)
+                write_single_struct_all_elem_cases(PLANE, STRUCT_ELEM_COUNTS[PLANE], Plane, real_t, Plane, real_t)
+                write_single_struct_all_elem_cases(QUATERNION, STRUCT_ELEM_COUNTS[QUATERNION], Quaternion, real_t, Quaternion, real_t)
+                write_single_struct_all_elem_cases(AABB, STRUCT_ELEM_COUNTS[AABB], ::AABB, real_t, ::AABB, real_t)
+                write_single_struct_all_elem_cases(TRANSFORM_3D, STRUCT_ELEM_COUNTS[TRANSFORM_3D], Transform3D, real_t, Transform3D, real_t)
+                write_single_struct_all_elem_cases(PROJECTION, STRUCT_ELEM_COUNTS[PROJECTION], Projection, real_t, Projection, real_t)
+                write_single_struct_all_elem_cases(BASIS, STRUCT_ELEM_COUNTS[BASIS], Basis, real_t, Basis, real_t)
+                default: ERR_FAIL_V_MSG(Variant(), "internal error: invalid struct type in entity manager");
+            }
+        }
+    }
     return false;
 }
 
 bool EntityManager::set(Id p_id, FieldIndex p_field_index, Variant value) {
-    //TODO
-    return false;
+    IdParts parts = p_id.to_parts();
+    ExistsAndIdData p_id_data_if_exists = entity_exists_internal(parts);
+    if (!p_id_data_if_exists.exists) { return Variant();}
+    IdData p_id_data = p_id_data_if_exists.data;
+    DEV_ASSERT_MSG(p_id_data.type_idx < num_types, "internal error: entity system IdData entry had a type_idx beyond maximum");
+    TypeData p_type_data = type_data[p_id_data.type_idx];
+    ERR_FAIL_COND_V_MSG(p_field_index >= p_type_data.num_fields, Variant(), "invalid field for id, must be one of the fields originally defined on the type during initialization");
+    FieldData p_field_data = field_data[p_field_index + p_type_data.fields_start];
+    return set_internal(p_id_data, p_type_data, p_field_index, p_field_data, value);
 }
 
 bool EntityManager::set_gdscript(int64_t p_id_gdscript, FieldIndex p_field_index, Variant value) {
     return set(Id{p_id_gdscript}, p_field_index, value);
 }
 
-bool EntityManager::set_internal_in_array(IdData p_id_parts, TypeData p_type_data, FieldIndex p_field_index, FieldData p_field_data, Index p_sub_idx, Variant value) {
-    //TODO
+bool EntityManager::set_internal_in_array(IdData p_id_data, TypeData p_type_data, FieldIndex p_field_index, FieldData p_field_data, Index p_sub_idx, Variant value) {
+    Index p_idx = p_id_data.get_idx();
+    ERR_FAIL_COND_V_MSG(p_field_data.fixed_len <= 1, false, "field is not a `fixed-len-array` type, cannot get a single value indexed from a `single-value` type");
+    if (p_field_data.struct_t == NONE) { // array of vals
+        switch (p_field_data.elem_t) {
+            case BOOL: [[fallthrough]];
+            write_single_from_array_of_vals_case(U8, uint8_t, false, int64_t, false)
+            write_single_from_array_of_vals_case(I8, int8_t, false, int64_t, false)
+            write_single_from_array_of_vals_case(U16, uint16_t, false, int64_t, false)
+            write_single_from_array_of_vals_case(I16, int16_t, false, int64_t, false)
+            write_single_from_array_of_vals_case(U32, uint32_t, false, int64_t, false)
+            write_single_from_array_of_vals_case(I32, int32_t, false, int64_t, false)
+            case ENTITY_ID: [[fallthrough]];
+            case U64: [[fallthrough]]; // Variants can never hold integers greater than INT64_MAX, even if using U64 mode
+            write_single_from_array_of_vals_case(I64, int64_t, false, int64_t, false)
+            write_single_from_array_of_vals_case(F16, uint16_t, true, double, false)
+            write_single_from_array_of_vals_case(F32, float, false, double, false)
+            write_single_from_array_of_vals_case(F64, double, false, double, false)
+            case VARIANT: {
+                Variant* dst_ptr = p_field_data.get_elem_ptr_cast<Variant>(p_idx);
+                dst_ptr += p_sub_idx;
+                *dst_ptr = value;
+                break;
+            }
+            default: ERR_FAIL_V_MSG(Variant(), "Invalid `elem_t` type in entity manager");
+        }
+    } else { // array of structs
+        switch (p_field_data.struct_t) {
+            write_single_from_array_of_structs_all_elem_cases(VEC_2, STRUCT_ELEM_COUNTS[VEC_2], Vector2i, int32_t, Vector2, real_t)
+            write_single_from_array_of_structs_all_elem_cases(VEC_3, STRUCT_ELEM_COUNTS[VEC_3], Vector3i, int32_t, Vector3, real_t)
+            write_single_from_array_of_structs_all_elem_cases(VEC_4, STRUCT_ELEM_COUNTS[VEC_4], Vector4i, int32_t, Vector4, real_t)
+            write_single_from_array_of_structs_all_elem_cases(COLOR_3, STRUCT_ELEM_COUNTS[COLOR_3], Color, float, Color, float)
+            write_single_from_array_of_structs_all_elem_cases(COLOR_4, STRUCT_ELEM_COUNTS[COLOR_4], Color, float, Color, float)
+            write_single_from_array_of_structs_all_elem_cases(RECT_2, STRUCT_ELEM_COUNTS[RECT_2], Rect2i, int32_t, Rect2, real_t)
+            write_single_from_array_of_structs_all_elem_cases(TRANSFORM_2D, STRUCT_ELEM_COUNTS[TRANSFORM_2D], Transform2D, real_t, Transform2D, real_t)
+            write_single_from_array_of_structs_all_elem_cases(PLANE, STRUCT_ELEM_COUNTS[PLANE], Plane, real_t, Plane, real_t)
+            write_single_from_array_of_structs_all_elem_cases(QUATERNION, STRUCT_ELEM_COUNTS[QUATERNION], Quaternion, real_t, Quaternion, real_t)
+            write_single_from_array_of_structs_all_elem_cases(AABB, STRUCT_ELEM_COUNTS[AABB], ::AABB, real_t, ::AABB, real_t)
+            write_single_from_array_of_structs_all_elem_cases(TRANSFORM_3D, STRUCT_ELEM_COUNTS[TRANSFORM_3D], Transform3D, real_t, Transform3D, real_t)
+            write_single_from_array_of_structs_all_elem_cases(PROJECTION, STRUCT_ELEM_COUNTS[PROJECTION], Projection, real_t, Projection, real_t)
+            write_single_from_array_of_structs_all_elem_cases(BASIS, STRUCT_ELEM_COUNTS[BASIS], Basis, real_t, Basis, real_t)
+            default: ERR_FAIL_V_MSG(Variant(), "internal error: invalid struct type in entity manager");
+        }
+    }
     return false;
 }
 
 bool EntityManager::set_one_in_array(Id p_id, FieldIndex p_field_index, Index p_sub_idx, Variant value) {
-    //TODO
-    return false;
+    IdParts parts = p_id.to_parts();
+    ExistsAndIdData p_id_data_if_exists = entity_exists_internal(parts);
+    if (!p_id_data_if_exists.exists) { return Variant();}
+    IdData p_id_data = p_id_data_if_exists.data;
+    DEV_ASSERT_MSG(p_id_data.type_idx < num_types, "internal error: entity system IdData entry had a type_idx beyond maximum");
+    TypeData p_type_data = type_data[p_id_data.type_idx];
+    ERR_FAIL_COND_V_MSG(p_field_index >= p_type_data.num_fields, Variant(), "invalid field for id, must be one of the fields originally defined on the type during initialization");
+    FieldData p_field_data = field_data[p_field_index + p_type_data.fields_start];
+    ERR_FAIL_COND_V_MSG(p_sub_idx >= p_field_data.fixed_len, Variant(), "array index is larger than the defined array fixed length for this field during initialization");
+    return set_internal_in_array(p_id_data, p_type_data, p_field_index, p_field_data, p_sub_idx, value);
 }
 
 bool EntityManager::set_one_in_array_gdscript(int64_t p_id_gdscript, FieldIndex p_field_index, Index p_sub_idx, Variant value) {
     return set_one_in_array(Id{p_id_gdscript}, p_field_index, p_sub_idx, value);
 }
 
-void EntityManager::define_system(TypeIndex p_num_types) {
+void EntityManager::define_manager(TypeIndex p_num_types) {
     ERR_FAIL_COND_MSG(init_status != UNINIT, "`define_system()` must be the FIRST step in the EntitySystem initialization process");
     init_status = SET_TOTAL_TYPES;
     num_types = p_num_types;
@@ -479,11 +703,7 @@ void EntityManager::define_field_internal(TypeIndex p_type_idx, FieldIndex p_fie
         for (int64_t a = 0; a < num_allowed; a += 1) {
             TypeIndex p_allowed_type_idx = p_allowed_ids[a];
             ERR_FAIL_COND_MSG(p_allowed_type_idx > num_types, "allowed entity id type index is greater than the largest entity type");
-            set_allowed_type_id(fidx, a);
-            FieldIndex block = p_allowed_type_idx >> 6;
-            FieldIndex bit_shift = p_allowed_type_idx & 63;
-            uint64_t bit = (uint64_t)1 << bit_shift;
-            field_allowed_id_list[(p_field_data.allowed_id_list_index * num_allowed_id_blocks_per_idx) + block] |= bit;
+            set_allowed_type_id(p_field_data.allowed_id_list_index, p_allowed_type_idx);
         }
     } else {
         p_field_data.allowed_id_list_index = 0;
@@ -498,7 +718,7 @@ void EntityManager::define_field(TypeIndex p_type_idx, FieldIndex p_field_idx, T
 void EntityManager::define_entity_id_field(TypeIndex p_type_idx, FieldIndex p_field_idx, PackedInt32Array p_allowed_ids = PackedInt32Array()) {
     define_field_internal(p_type_idx, p_field_idx, ENTITY_ID, NONE, 1, true, p_allowed_ids);
 }
-void EntityManager::define_struct_field(TypeIndex p_type_idx, FieldIndex p_field_idx, TElem p_elem, TStruct p_struct) {
+void EntityManager::define_struct_field(TypeIndex p_type_idx, FieldIndex p_field_idx, TStruct p_struct, TElem p_elem) {
     ERR_FAIL_COND_MSG(!elem_is_numeric(p_elem), "only numeric types (INT, FLOAT, U8, I32, I64, etc...) area allowed in `struct` types (VEC_2, VEC_3, COLOR_4, RECT_2, etc...)");
     define_field_internal(p_type_idx, p_field_idx, p_elem, p_struct, 1, false, PackedInt32Array());
 }
@@ -509,11 +729,11 @@ void EntityManager::define_fixed_length_array_field(TypeIndex p_type_idx, FieldI
 void EntityManager::define_fixed_length_entity_id_array_field(TypeIndex p_type_idx, FieldIndex p_field_idx, TFixed p_fixed, PackedInt32Array p_allowed_ids = PackedInt32Array()) {
     define_field_internal(p_type_idx, p_field_idx, ENTITY_ID, NONE, MAX((FieldType)1, p_fixed), true, p_allowed_ids);
 }
-void EntityManager::define_fixed_length_struct_array_field(TypeIndex p_type_idx, FieldIndex p_field_idx, TElem p_elem, TStruct p_struct, TFixed p_fixed) {
+void EntityManager::define_fixed_length_struct_array_field(TypeIndex p_type_idx, FieldIndex p_field_idx, TStruct p_struct, TElem p_elem, TFixed p_fixed) {
     ERR_FAIL_COND_MSG(!elem_is_numeric(p_elem), "only numeric types (INT, FLOAT, U8, I32, I64, etc...) area allowed in `struct` types (VEC_2, VEC_3, COLOR_4, RECT_2, etc...)");
     define_field_internal(p_type_idx, p_field_idx, p_elem, p_struct, MAX((FieldType)1, p_fixed), false, PackedInt32Array());
 }
-void EntityManager::finalize_entity_system_layout() {
+void EntityManager::finalize_entity_manager_layout() {
     ERR_FAIL_COND_MSG(init_status != DEFINING_ALL_FIELDS, "`finalize_entity_system_layout()` must be the FOURTH and final step in the EntitySystem initialization process (after `set_total_types()`, all `define_type()` calls, and all `define_xxxxx_field()` calls)");
     for (TypeIndex t = 0; t < num_types; t += 1) {
         ERR_FAIL_COND_MSG(type_data[t].num_fields == 0, "you must call `define_type()` for EVERY type, as defined by `set_total_types()`, before you call `define_xxxxx_field()`");
@@ -529,4 +749,11 @@ bool EntityManager::type_id_is_allowed_in_field(FieldIndex p_allowed_block_offse
     uint64_t bit_shift = (uint64_t)p_type_idx & 63;
     uint64_t bit = (uint64_t)1 << bit_shift;
     return (field_allowed_id_list[(p_allowed_block_offset * num_allowed_id_blocks_per_idx) + block] & bit) == bit;
+}
+
+void EntityManager::set_allowed_type_id(FieldIndex p_allowed_block_offset, TypeIndex p_type_idx) {
+    uint64_t block = (uint64_t)p_type_idx >> 6;
+    uint64_t bit_shift = (uint64_t)p_type_idx & 63;
+    uint64_t bit = (uint64_t)1 << bit_shift;
+    field_allowed_id_list[(p_allowed_block_offset * num_allowed_id_blocks_per_idx) + block] |= bit;
 }

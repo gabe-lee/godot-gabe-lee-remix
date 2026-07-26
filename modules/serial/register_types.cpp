@@ -1,16 +1,16 @@
 
 #include "register_types.h"
 #include "core/object/class_db.h"
-#include "entity_manager.h"
+#include "serializer.h"
 
-void initialize_entity_manager_module(ModuleInitializationLevel p_level) {
+void initialize_serializer_module(ModuleInitializationLevel p_level) {
     if (p_level != MODULE_INITIALIZATION_LEVEL_SCENE) {
         return;
     }
-    ClassDB::register_class<EntityManager>();
+    ClassDB::register_class<Serializer>();
 }
 
-void uninitialize_entity_manager_module(ModuleInitializationLevel p_level) {
+void uninitialize_serializer_module(ModuleInitializationLevel p_level) {
     if (p_level != MODULE_INITIALIZATION_LEVEL_SCENE) {
         return;
     }

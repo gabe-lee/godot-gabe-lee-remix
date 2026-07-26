@@ -76,14 +76,14 @@ echo "
 #include \"core/object/class_db.h\"
 $CLASS_INCLUDE
 
-void initialize_my_module_module(ModuleInitializationLevel p_level) {
+void initialize_${MOD_NAME}_module(ModuleInitializationLevel p_level) {
     if (p_level != MODULE_INITIALIZATION_LEVEL_SCENE) {
         return;
     }
     $CLASS_REGISTER
 }
 
-void uninitialize_my_module_module(ModuleInitializationLevel p_level) {
+void uninitialize_${MOD_NAME}_module(ModuleInitializationLevel p_level) {
     if (p_level != MODULE_INITIALIZATION_LEVEL_SCENE) {
         return;
     }
