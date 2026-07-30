@@ -10,4 +10,8 @@ public:
     PackedByteArray arr;
     int64_t rpos = 0;
     int64_t wpos = 0;
+
+    PackedByteArray_RWWrapper() {
+        arr = PackedByteArray();
+    };
 };

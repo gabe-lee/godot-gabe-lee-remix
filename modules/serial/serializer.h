@@ -2,7 +2,7 @@
 #pragma once
 
 #include "core/object/ref_counted.h"
-#include "reader_writer.hpp"
+#include "reader_writer.h"
 
 class Serializer : public RefCounted {
     GDCLASS(Serializer, RefCounted);
@@ -14,13 +14,9 @@ private:
 
 protected:
     static void _bind_methods();
-    // Protected vars/methods
 
 public:
-    // Public vars/methods
-    // int add(int a, int b) // example
 
-    Serializer();
-    // ~Serializer(); // Destructor
+    Serializer() = default;
 };
 
