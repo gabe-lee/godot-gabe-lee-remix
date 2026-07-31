@@ -242,6 +242,18 @@ public:
     template<typename T_SERIAL, typename T_NATIVE, typename T_ARRAY>
     inline SerialError write_t_cast_array_class(T_ARRAY arr, uint32_t arr_offset, uint32_t count);
 
+    template<typename T_SERIAL, typename T_NATIVE, typename T_ARRAY>
+    inline T_ARRAY get_gds_array(T_ARRAY dest_array, uint32_t array_offset, uint32_t count);
+
+    template<typename T_SERIAL, typename T_NATIVE, typename T_ARRAY>
+    inline T_ARRAY read_gds_array(T_ARRAY dest_array, uint32_t array_offset, uint32_t count);
+
+    template<typename T_SERIAL, typename T_NATIVE, typename T_ARRAY>
+    SerialError set_gds_array(T_ARRAY src_array, uint32_t array_offset, uint32_t count);
+
+    template<typename T_SERIAL, typename T_NATIVE, typename T_ARRAY>
+    SerialError write_gds_array(T_ARRAY src_array, uint32_t array_offset, uint32_t count);
+
     template<typename T>
     inline SerialError get_t_array_len_prefix(T* val_dst);
 
@@ -277,6 +289,18 @@ public:
 
     template<typename T_SERIAL, typename T_NATIVE, typename T_ARRAY>
     inline SerialError write_t_cast_array_class_len_prefix(T_ARRAY arr, uint32_t arr_offset, uint32_t count);
+
+    template<typename T_SERIAL, typename T_NATIVE, typename T_ARRAY>
+    inline T_ARRAY get_gds_array_len_prefix(T_ARRAY dest_array, uint32_t array_offset);
+
+    template<typename T_SERIAL, typename T_NATIVE, typename T_ARRAY>
+    inline T_ARRAY read_gds_array_len_prefix(T_ARRAY dest_array, uint32_t array_offset);
+
+    template<typename T_SERIAL, typename T_NATIVE, typename T_ARRAY>
+    SerialError set_gds_array_len_prefix(T_ARRAY src_array, uint32_t array_offset, uint32_t count);
+
+    template<typename T_SERIAL, typename T_NATIVE, typename T_ARRAY>
+    SerialError write_gds_array_len_prefix(T_ARRAY src_array, uint32_t array_offset, uint32_t count);
     
 private:
     Ref<RefCounted> object = nullptr;

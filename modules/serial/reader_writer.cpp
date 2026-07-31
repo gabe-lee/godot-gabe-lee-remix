@@ -2,7 +2,10 @@
 #include "reader_writer.h"
 #include "core/error/error_macros.h"
 #include "core/math/math_defs.h"
+#include "core/math/rect2i.h"
+#include "core/math/transform_2d.h"
 #include "core/math/vector2.h"
+#include <cstdint>
 #include <tuple>
 #include "types.h"
 #include "core/object/class_db.h"
@@ -23,10 +26,15 @@ ClassDB::bind_method(D_METHOD("read_" #m_native_name "_using_" #m_serial_name), 
 ClassDB::bind_method(D_METHOD("set_" #m_native_name "_using_" #m_serial_name, "val"), &ReaderWriter::set_gds<m_serial, m_native>); \
 ClassDB::bind_method(D_METHOD("write_" #m_native_name "_using_" #m_serial_name, "val"), &ReaderWriter::write_gds<m_serial, m_native>);
 
-
-#define bind_gds_single_all_elems(m_native, m_native_name, m_native_default_elem) \
+#define bind_gds_single_float_elems(m_native, m_native_name, m_native_default_elem) \
 bind_gds_single(m_native_default_elem, m_native, m_native_name)\
-bind_gds_single_cast(bool, bool, m_native, m_native_name)\
+bind_gds_single_cast(HalfU16, f16, m_native, m_native_name) \
+bind_gds_single_cast(float, f32, m_native, m_native_name) \
+bind_gds_single_cast(double, f64, m_native, m_native_name) \
+bind_gds_single_cast(real_t, f_real, m_native, m_native_name)
+
+#define bind_gds_single_int_elems(m_native, m_native_name, m_native_default_elem) \
+bind_gds_single(m_native_default_elem, m_native, m_native_name)\
 bind_gds_single_cast(uint8_t, u8, m_native, m_native_name) \
 bind_gds_single_cast(int8_t, i8, m_native, m_native_name) \
 bind_gds_single_cast(uint16_t, u16, m_native, m_native_name) \
@@ -34,11 +42,67 @@ bind_gds_single_cast(int16_t, i16, m_native, m_native_name) \
 bind_gds_single_cast(uint32_t, u32, m_native, m_native_name) \
 bind_gds_single_cast(int32_t, i32, m_native, m_native_name) \
 bind_gds_single_cast(uint64_t, u64, m_native, m_native_name) \
-bind_gds_single_cast(int64_t, i64, m_native, m_native_name) \
-bind_gds_single_cast(HalfU16, f16, m_native, m_native_name) \
-bind_gds_single_cast(float, f32, m_native, m_native_name) \
-bind_gds_single_cast(double, f64, m_native, m_native_name) \
-bind_gds_single_cast(real_t, f_real, m_native, m_native_name)
+bind_gds_single_cast(int64_t, i64, m_native, m_native_name)
+
+#define bind_gds_array(m_serial, m_packed, m_array, m_native, m_native_name) \
+ClassDB::bind_method(D_METHOD("get_" #m_packed "array_of_" #m_native_name, "dest_array", "array_offset", "count"), &ReaderWriter::get_gds_array<m_serial, m_native, m_array>); \
+ClassDB::bind_method(D_METHOD("read_" #m_packed "array_of_" #m_native_name, "dest_array", "array_offset", "count"), &ReaderWriter::read_gds_array<m_serial, m_native, m_array>); \
+ClassDB::bind_method(D_METHOD("set_" #m_packed "array_of_" #m_native_name, "source_array", "array_offset", "count"), &ReaderWriter::set_gds_array<m_serial, m_native, m_array>); \
+ClassDB::bind_method(D_METHOD("write_" #m_packed "array_of_" #m_native_name, "source_array", "array_offset", "count"), &ReaderWriter::write_gds_array<m_serial, m_native, m_array>);
+
+#define bind_gds_array_cast(m_serial, m_serial_name, m_packed, m_array, m_native, m_native_name) \
+ClassDB::bind_method(D_METHOD("get_" #m_packed "array_of_" #m_native_name "_using_" #m_serial_name, "dest_array", "array_offset", "count"), &ReaderWriter::get_gds_array<m_serial, m_native, m_array>); \
+ClassDB::bind_method(D_METHOD("read_" #m_packed "array_of_" #m_native_name "_using_" #m_serial_name, "dest_array", "array_offset", "count"), &ReaderWriter::read_gds_array<m_serial, m_native, m_array>); \
+ClassDB::bind_method(D_METHOD("set_" #m_packed "array_of_" #m_native_name "_using_" #m_serial_name, "source_array", "array_offset", "count"), &ReaderWriter::set_gds_array<m_serial, m_native, m_array>); \
+ClassDB::bind_method(D_METHOD("write_" #m_packed "array_of_" #m_native_name "_using_" #m_serial_name, "source_array", "array_offset", "count"), &ReaderWriter::write_gds_array<m_serial, m_native, m_array>);
+
+#define bind_gds_array_float_elems(m_native, m_packed, m_array, m_native_name, m_native_default_elem) \
+bind_gds_array(m_native_default_elem, m_packed, m_array, m_native, m_native_name)\
+bind_gds_array_cast(HalfU16, f16, m_packed, m_array, m_native, m_native_name) \
+bind_gds_array_cast(float, f32, m_packed, m_array, m_native, m_native_name) \
+bind_gds_array_cast(double, f64, m_packed, m_array, m_native, m_native_name) \
+bind_gds_array_cast(real_t, f_real, m_packed, m_array, m_native, m_native_name)
+
+#define bind_gds_array_int_elems(m_native, m_packed, m_array, m_native_name, m_native_default_elem) \
+bind_gds_array(m_native_default_elem, m_packed, m_array, m_native, m_native_name)\
+bind_gds_array_cast(uint8_t, u8, m_packed, m_array, m_native, m_native_name) \
+bind_gds_array_cast(int8_t, i8, m_packed, m_array, m_native, m_native_name) \
+bind_gds_array_cast(uint16_t, u16, m_packed, m_array, m_native, m_native_name) \
+bind_gds_array_cast(int16_t, i16, m_packed, m_array, m_native, m_native_name) \
+bind_gds_array_cast(uint32_t, u32, m_packed, m_array, m_native, m_native_name) \
+bind_gds_array_cast(int32_t, i32, m_packed, m_array, m_native, m_native_name) \
+bind_gds_array_cast(uint64_t, u64, m_packed, m_array, m_native, m_native_name) \
+bind_gds_array_cast(int64_t, i64, m_packed, m_array, m_native, m_native_name)
+
+#define bind_gds_array_len_pfx(m_serial, m_packed, m_array, m_native, m_native_name) \
+ClassDB::bind_method(D_METHOD("get_len_prefix_" #m_packed "array_of_" #m_native_name, "dest_array", "array_offset"), &ReaderWriter::get_gds_array_len_prefix<m_serial, m_native, m_array>); \
+ClassDB::bind_method(D_METHOD("read_len_prefix_" #m_packed "array_of_" #m_native_name, "dest_array", "array_offset"), &ReaderWriter::read_gds_array_len_prefix<m_serial, m_native, m_array>); \
+ClassDB::bind_method(D_METHOD("set_len_prefix_" #m_packed "array_of_" #m_native_name, "source_array", "array_offset", "count"), &ReaderWriter::set_gds_array_len_prefix<m_serial, m_native, m_array>); \
+ClassDB::bind_method(D_METHOD("write_len_prefix_" #m_packed "array_of_" #m_native_name, "source_array", "array_offset", "count"), &ReaderWriter::write_gds_array_len_prefix<m_serial, m_native, m_array>);
+
+#define bind_gds_array_cast_len_pfx(m_serial, m_serial_name, m_packed, m_array, m_native, m_native_name) \
+ClassDB::bind_method(D_METHOD("get_len_prefix_" #m_packed "array_of_" #m_native_name "_using_" #m_serial_name, "dest_array", "array_offset"), &ReaderWriter::get_gds_array_len_prefix<m_serial, m_native, m_array>); \
+ClassDB::bind_method(D_METHOD("read_len_prefix_" #m_packed "array_of_" #m_native_name "_using_" #m_serial_name, "dest_array", "array_offset"), &ReaderWriter::read_gds_array_len_prefix<m_serial, m_native, m_array>); \
+ClassDB::bind_method(D_METHOD("set_len_prefix_" #m_packed "array_of_" #m_native_name "_using_" #m_serial_name, "source_array", "array_offset", "count"), &ReaderWriter::set_gds_array_len_prefix<m_serial, m_native, m_array>); \
+ClassDB::bind_method(D_METHOD("write_len_prefix_" #m_packed "array_of_" #m_native_name "_using_" #m_serial_name, "source_array", "array_offset", "count"), &ReaderWriter::write_gds_array_len_prefix<m_serial, m_native, m_array>);
+
+#define bind_gds_array_len_pfx_float_elems(m_native, m_packed, m_array, m_native_name, m_native_default_elem) \
+bind_gds_array_len_pfx(m_native_default_elem,m_packed, m_array, m_native, m_native_name)\
+bind_gds_array_cast_len_pfx(HalfU16, f16, m_packed, m_array, m_native, m_native_name) \
+bind_gds_array_cast_len_pfx(float, f32, m_packed, m_array, m_native, m_native_name) \
+bind_gds_array_cast_len_pfx(double, f64, m_packed, m_array, m_native, m_native_name) \
+bind_gds_array_cast_len_pfx(real_t, f_real, m_packed, m_array, m_native, m_native_name)
+
+#define bind_gds_array_len_pfx_int_elems(m_native, m_packed, m_array, m_native_name, m_native_default_elem) \
+bind_gds_array_len_pfx(m_native_default_elem,m_packed, m_array, m_native, m_native_name)\
+bind_gds_array_cast_len_pfx(uint8_t, u8, m_packed, m_array, m_native, m_native_name) \
+bind_gds_array_cast_len_pfx(int8_t, i8, m_packed, m_array, m_native, m_native_name) \
+bind_gds_array_cast_len_pfx(uint16_t, u16, m_packed, m_array, m_native, m_native_name) \
+bind_gds_array_cast_len_pfx(int16_t, i16, m_packed, m_array, m_native, m_native_name) \
+bind_gds_array_cast_len_pfx(uint32_t, u32, m_packed, m_array, m_native, m_native_name) \
+bind_gds_array_cast_len_pfx(int32_t, i32, m_packed, m_array, m_native, m_native_name) \
+bind_gds_array_cast_len_pfx(uint64_t, u64, m_packed, m_array, m_native, m_native_name) \
+bind_gds_array_cast_len_pfx(int64_t, i64, m_packed, m_array, m_native, m_native_name)
 
 template<typename T>
 T ReaderWriter::collect_results(T res) {
@@ -79,10 +143,43 @@ void ReaderWriter::_bind_methods() {
     // ClassDB::bind_method(D_METHOD("seek_write_pos", "delta", "from"), &ReaderWriter::seek_write_pos);
     // ClassDB::bind_method(D_METHOD("get_bytes", "delta", "from"), &ReaderWriter::get_bytes);
     // ClassDB::bind_method(D_METHOD("read_bytes", "delta", "from"), &ReaderWriter::read_bytes);
-    bind_gds_single_all_elems(int64_t, integer, int64_t);
-    bind_gds_single_all_elems(double, float, double);
-    bind_gds_single_all_elems(bool, bool, bool);
-    bind_gds_single_all_elems(Vector2, vec2, real_t);
+    bind_gds_single_int_elems(int64_t, integer, int64_t);
+    bind_gds_single_float_elems(double, float, double);
+    bind_gds_single(bool, bool, bool);
+    bind_gds_single_float_elems(Vector2, vec2, real_t);
+    bind_gds_single_int_elems(Vector2i, vec2i, int32_t);
+    bind_gds_single_float_elems(Vector3, vec3, real_t);
+    bind_gds_single_int_elems(Vector3i, vec3i, int32_t);
+    bind_gds_single_float_elems(Vector4, vec4, real_t);
+    bind_gds_single_int_elems(Vector4i, vec4i, int32_t);
+    bind_gds_single_float_elems(Rect2, rect2, real_t);
+    bind_gds_single_int_elems(Rect2i, rect2i, int32_t);
+    bind_gds_single_float_elems(Color, color, float);
+    bind_gds_single_float_elems(Plane, plane, real_t);
+    bind_gds_single_float_elems(::AABB, aabb, real_t);
+    bind_gds_single_float_elems(Transform2D, transform2d, real_t);
+    bind_gds_single_float_elems(Transform3D, transform3d, real_t);
+    bind_gds_single_float_elems(Projection, projection, real_t);
+    bind_gds_single_float_elems(Basis, basis, real_t);
+
+    bind_gds_array_int_elems(int64_t,, Array, integer, int64_t);
+    bind_gds_array_float_elems(double,, Array, float, double);
+    bind_gds_array(bool,, Array, bool, bool);
+    bind_gds_array_float_elems(Vector2,, Array, vec2, real_t);
+    bind_gds_array_int_elems(Vector2i,, Array, vec2i, int32_t);
+    bind_gds_array_float_elems(Vector3,, Array, vec3, real_t);
+    bind_gds_array_int_elems(Vector3i,, Array, vec3i, int32_t);
+    bind_gds_array_float_elems(Vector4,, Array, vec4, real_t);
+    bind_gds_array_int_elems(Vector4i,, Array, vec4i, int32_t);
+    bind_gds_array_float_elems(Rect2,, Array, rect2, real_t);
+    bind_gds_array_int_elems(Rect2i,, Array, rect2i, int32_t);
+    bind_gds_array_float_elems(Color,, Array, color, float);
+    bind_gds_array_float_elems(Plane,, Array, plane, real_t);
+    bind_gds_array_float_elems(::AABB,, Array, aabb, real_t);
+    bind_gds_array_float_elems(Transform2D,, Array, transform2d, real_t);
+    bind_gds_array_float_elems(Transform3D,, Array, transform3d, real_t);
+    bind_gds_array_float_elems(Projection,, Array, projection, real_t);
+    bind_gds_array_float_elems(Basis,, Array, basis, real_t);
 }
 
 void ReaderWriter::clear_errors() {
@@ -223,7 +320,8 @@ T_NATIVE ReaderWriter::read_gds() {
     DEV_ASSERT_MSG(S != SerialType::_S_INVALID, "invalid serial type");
     FIND_N(T_NATIVE)
     DEV_ASSERT_MSG(N != SerialType::_N_INVALID, "invalid native type for get_gds/read_gds");
-    using T_NATIVE_ELEM_LIST = std::tuple<bool, int64_t, double, real_t, int32_t, real_t, int32_t, real_t, int32_t, float, real_t, real_t, real_t, real_t, real_t, real_t, real_t>;
+    //                                    bool  int      float   vec2    vec2i    vec3    vec3i    vec4    vec4i    rect2   rect2i   color  xfrm2   xfrm3   plane   basis   proj    quat    aabb
+    using T_NATIVE_ELEM_LIST = std::tuple<bool, int64_t, double, real_t, int32_t, real_t, int32_t, real_t, int32_t, real_t, int32_t, float, real_t, real_t, real_t, real_t, real_t, real_t, real_t>;
     using T_NATIVE_ELEM = std::tuple_element_t<N, T_NATIVE_ELEM_LIST>;
     const uint32_t SERIAL_ELEM_SIZE = SerialType::serial_elem_size(S);
     const uint32_t NATIVE_ELEM_SIZE = SerialType::native_elem_size(N);
@@ -259,7 +357,7 @@ ReaderWriter::SerialError ReaderWriter::write_gds(T_NATIVE val) {
     DEV_ASSERT_MSG(S != SerialType::_S_INVALID, "invalid serial type");
     FIND_N(T_NATIVE)
     DEV_ASSERT_MSG(N != SerialType::_N_INVALID, "invalid native type for get_gds/read_gds");
-    using T_NATIVE_ELEM_LIST = std::tuple<bool, int64_t, double, real_t, int32_t, real_t, int32_t, real_t, int32_t, float, real_t, real_t, real_t, real_t, real_t, real_t, real_t>;
+    using T_NATIVE_ELEM_LIST = std::tuple<bool, int64_t, double, real_t, int32_t, real_t, int32_t, real_t, int32_t, real_t, int32_t, float, real_t, real_t, real_t, real_t, real_t, real_t, real_t>;
     using T_NATIVE_ELEM = std::tuple_element_t<N, T_NATIVE_ELEM_LIST>;
     const uint32_t SERIAL_ELEM_SIZE = SerialType::serial_elem_size(S);
     const uint32_t NATIVE_ELEM_SIZE = SerialType::native_elem_size(N);
@@ -363,7 +461,7 @@ T_ARRAY ReaderWriter::read_t_cast_array_class(T_ARRAY arr, uint32_t arr_offset, 
 template<typename T_SERIAL, typename T_NATIVE, typename T_ARRAY>
 ReaderWriter::SerialError ReaderWriter::set_t_cast_array_class(T_ARRAY arr, uint32_t arr_offset, uint32_t count) {
     uint32_t end = arr_offset + count;
-    ERR_FAIL_COND_V_MSG(end > arr.size(), ERROR::ARRAY_SOURCE_TOO_SHORT_FOR_OFFSET_AND_COUNT, "`arr_offset` + `count` is greater than the `size()` of the array provided as the data source");
+    ERR_FAIL_COND_V_MSG(end > static_cast<uint32_t>(arr.size()), ERROR::ARRAY_SOURCE_TOO_SHORT_FOR_OFFSET_AND_COUNT, "`arr_offset` + `count` is greater than the `size()` of the array provided as the data source");
     int64_t init_pos = get_write_pos();
     for (uint32_t i = arr_offset; i < end; i += 1) {
         write_t_cast<T_SERIAL>((T_NATIVE)arr[i]);
@@ -374,12 +472,48 @@ ReaderWriter::SerialError ReaderWriter::set_t_cast_array_class(T_ARRAY arr, uint
 template<typename T_SERIAL, typename T_NATIVE, typename T_ARRAY>
 ReaderWriter::SerialError ReaderWriter::write_t_cast_array_class(T_ARRAY arr, uint32_t arr_offset, uint32_t count) {
     uint32_t end = arr_offset + count;
-    ERR_FAIL_COND_V_MSG(end > arr.size(), ERROR::ARRAY_SOURCE_TOO_SHORT_FOR_OFFSET_AND_COUNT, "`arr_offset` + `count` is greater than the `size()` of the array provided as the data source");
+    ERR_FAIL_COND_V_MSG(end > static_cast<uint32_t>(arr.size()), ERROR::ARRAY_SOURCE_TOO_SHORT_FOR_OFFSET_AND_COUNT, "`arr_offset` + `count` is greater than the `size()` of the array provided as the data source");
     for (uint32_t i = arr_offset; i < end; i += 1) {
         write_t_cast<T_SERIAL>((T_NATIVE)arr[i]);
     }
     return first_error;
 }
+
+template<typename T_SERIAL, typename T_NATIVE, typename T_ARRAY>
+T_ARRAY ReaderWriter::get_gds_array(T_ARRAY dest_array, uint32_t array_offset, uint32_t count) {
+    int64_t initial_pos = get_read_pos();
+    T_ARRAY arr = read_gds_array<T_SERIAL, T_NATIVE, T_ARRAY>(dest_array, array_offset, count);
+    seek_read_pos(initial_pos, SEEK::FROM_START);
+    return arr;
+}
+template<typename T_SERIAL, typename T_NATIVE, typename T_ARRAY>
+T_ARRAY ReaderWriter::read_gds_array(T_ARRAY dest_array, uint32_t array_offset, uint32_t count) {
+    uint32_t end = array_offset + count;
+    dest_array.resize(end);
+    for (uint32_t i = array_offset; i < end; i += 1) {
+        dest_array[i] = read_gds<T_SERIAL, T_NATIVE>();
+    }
+    return dest_array;
+}
+
+template<typename T_SERIAL, typename T_NATIVE, typename T_ARRAY>
+ReaderWriter::SerialError ReaderWriter::set_gds_array(T_ARRAY src_array, uint32_t array_offset, uint32_t count) {
+    int64_t initial_pos = get_write_pos();
+    write_gds_array<T_SERIAL, T_NATIVE, T_ARRAY>(src_array, array_offset, count);
+    seek_write_pos(initial_pos, SEEK::FROM_START);
+    return first_error;
+}
+
+template<typename T_SERIAL, typename T_NATIVE, typename T_ARRAY>
+ReaderWriter::SerialError ReaderWriter::write_gds_array(T_ARRAY src_array, uint32_t array_offset, uint32_t count) {
+    uint32_t end = array_offset + count;
+    ERR_FAIL_COND_V_MSG(end > static_cast<uint32_t>(src_array.size()), ERROR::ARRAY_SOURCE_TOO_SHORT_FOR_OFFSET_AND_COUNT, "`array_offset` + `count` is greater than the `size()` of the array provided as the data source");
+    for (uint32_t i = array_offset; i < end; i += 1) {
+        write_gds<T_SERIAL, T_NATIVE>(src_array[i]);
+    }
+    return first_error;
+}
+
 template<typename T>
 ReaderWriter::SerialError ReaderWriter::get_t_array_len_prefix(T* val_dst) {
     int64_t init_pos = get_read_pos();
@@ -483,7 +617,7 @@ T_ARRAY ReaderWriter::read_t_cast_array_class_len_prefix(T_ARRAY arr, uint32_t a
 template<typename T_SERIAL, typename T_NATIVE, typename T_ARRAY>
 ReaderWriter::ReaderWriter::SerialError ReaderWriter::set_t_cast_array_class_len_prefix(T_ARRAY arr, uint32_t arr_offset, uint32_t count) {
     uint32_t end = arr_offset + count;
-    ERR_FAIL_COND_V_MSG(end > arr.size(), ERROR::ARRAY_SOURCE_TOO_SHORT_FOR_OFFSET_AND_COUNT, "`arr_offset` + `count` is greater than the `size()` of the array provided as the data source");
+    ERR_FAIL_COND_V_MSG(end > static_cast<uint32_t>(arr.size()), ERROR::ARRAY_SOURCE_TOO_SHORT_FOR_OFFSET_AND_COUNT, "`arr_offset` + `count` is greater than the `size()` of the array provided as the data source");
     int64_t init_pos = get_write_pos();
     write_t(&count);
     for (uint32_t i = arr_offset; i < end; i += 1) {
@@ -495,10 +629,48 @@ ReaderWriter::ReaderWriter::SerialError ReaderWriter::set_t_cast_array_class_len
 template<typename T_SERIAL, typename T_NATIVE, typename T_ARRAY>
 ReaderWriter::ReaderWriter::SerialError ReaderWriter::write_t_cast_array_class_len_prefix(T_ARRAY arr, uint32_t arr_offset, uint32_t count) {
     uint32_t end = arr_offset + count;
-    ERR_FAIL_COND_V_MSG(end > arr.size(), ERROR::ARRAY_SOURCE_TOO_SHORT_FOR_OFFSET_AND_COUNT, "`arr_offset` + `count` is greater than the `size()` of the array provided as the data source");
+    ERR_FAIL_COND_V_MSG(end > static_cast<uint32_t>(arr.size()), ERROR::ARRAY_SOURCE_TOO_SHORT_FOR_OFFSET_AND_COUNT, "`arr_offset` + `count` is greater than the `size()` of the array provided as the data source");
     write_t(&count);
     for (uint32_t i = arr_offset; i < end; i += 1) {
         write_t_cast<T_SERIAL>((T_NATIVE)arr[i]);
+    }
+    return first_error;
+}
+
+
+template<typename T_SERIAL, typename T_NATIVE, typename T_ARRAY>
+T_ARRAY ReaderWriter::get_gds_array_len_prefix(T_ARRAY dest_array, uint32_t array_offset) {
+    int64_t initial_pos = get_read_pos();
+    T_ARRAY arr = read_gds_array_len_prefix<T_SERIAL, T_NATIVE, T_ARRAY>(dest_array, array_offset);
+    seek_read_pos(initial_pos, SEEK::FROM_START);
+    return arr;
+}
+template<typename T_SERIAL, typename T_NATIVE, typename T_ARRAY>
+T_ARRAY ReaderWriter::read_gds_array_len_prefix(T_ARRAY dest_array, uint32_t array_offset) {
+    uint32_t count = read_t_val<uint32_t>();
+    uint32_t end = array_offset + count;
+    dest_array.resize(end);
+    for (uint32_t i = array_offset; i < end; i += 1) {
+        dest_array[i] = read_gds<T_SERIAL, T_NATIVE>();
+    }
+    return dest_array;
+}
+
+template<typename T_SERIAL, typename T_NATIVE, typename T_ARRAY>
+ReaderWriter::SerialError ReaderWriter::set_gds_array_len_prefix(T_ARRAY src_array, uint32_t array_offset, uint32_t count) {
+    int64_t initial_pos = get_write_pos();
+    write_gds_array_len_prefix<T_SERIAL, T_NATIVE, T_ARRAY>(src_array, array_offset, count);
+    seek_write_pos(initial_pos, SEEK::FROM_START);
+    return first_error;
+}
+
+template<typename T_SERIAL, typename T_NATIVE, typename T_ARRAY>
+ReaderWriter::SerialError ReaderWriter::write_gds_array_len_prefix(T_ARRAY src_array, uint32_t array_offset, uint32_t count) {
+    uint32_t end = array_offset + count;
+    ERR_FAIL_COND_V_MSG(end > static_cast<uint32_t>(src_array.size()), ERROR::ARRAY_SOURCE_TOO_SHORT_FOR_OFFSET_AND_COUNT, "`array_offset` + `count` is greater than the `size()` of the array provided as the data source");
+    write_t_val(count);
+    for (uint32_t i = array_offset; i < end; i += 1) {
+        write_gds<T_SERIAL, T_NATIVE>(src_array[i]);
     }
     return first_error;
 }
