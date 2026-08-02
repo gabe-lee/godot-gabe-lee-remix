@@ -4,6 +4,7 @@
 #include "core/io/file_access.h"
 #include "core/io/stream_peer.h"
 #include "core/math/aabb.h"
+#include "core/math/math_defs.h"
 #include "core/math/projection.h"
 #include "core/math/quaternion.h"
 #include "core/math/rect2.h"
@@ -13,6 +14,7 @@
 #include "core/typedefs.h"
 #include "core/variant/type_info.h"
 #include "core/variant/variant.h"
+#include <cstdint>
 
 class HalfU16 {
 public:
@@ -86,82 +88,11 @@ private:
     uint8_t first_error = ERROR::NONE;
     uint8_t last_error = ERROR::NONE;
 
-    template<typename T>
-    _FORCE_INLINE_ static constexpr uint32_t gds_type_index() {
-        if constexpr (std::is_same_v<T, bool>) {
-            return 0;
-        } else if constexpr (std::is_same_v<T, int64_t>) {
-            return 1;
-        } else if constexpr (std::is_same_v<T, double>) {
-            return 2;
-        } else if constexpr (std::is_same_v<T, Vector2>) {
-            return 3;
-        } else if constexpr (std::is_same_v<T, Vector2i>) {
-            return 4;
-        } else if constexpr (std::is_same_v<T, Vector3>) {
-            return 5;
-        } else if constexpr (std::is_same_v<T, Vector3i>) {
-            return 6;
-        } else if constexpr (std::is_same_v<T, Vector4>) {
-            return 7;
-        } else if constexpr (std::is_same_v<T, Vector4i>) {
-            return 8;
-        } else if constexpr (std::is_same_v<T, Rect2>) {
-            return 9;
-        } else if constexpr (std::is_same_v<T, Rect2i>) {
-            return 10;
-        } else if constexpr (std::is_same_v<T, Color>) {
-            return 11;
-        } else if constexpr (std::is_same_v<T, Transform2D>) {
-            return 12;
-        } else if constexpr (std::is_same_v<T, Transform3D>) {
-            return 13;
-        } else if constexpr (std::is_same_v<T, Plane>) {
-            return 14;
-        } else if constexpr (std::is_same_v<T, Basis>) {
-            return 15;
-        } else if constexpr (std::is_same_v<T, Projection>) {
-            return 16;
-        } else if constexpr (std::is_same_v<T, Quaternion>) {
-            return 17;
-        } else if constexpr (std::is_same_v<T, AABB>) {
-            return 18;
-        } else {
-           return 0xFFFFFFFF;
-        }
-    }
-    using T_NATIVE_ELEM_LIST = std::tuple<
-        bool, // BOOLEAN
-        int64_t, // INTEGER
-        double, // FLOAT
-        real_t, // VEC2
-        int32_t, // VEC2I
-        real_t, // VEC3
-        int32_t, // VEC3I
-        real_t, // VEC4
-        int32_t, // VEC4I
-        real_t, // RECT2
-        int32_t, // RECT2I
-        float, // COLOR
-        real_t, // TRANSFORM2D
-        real_t, // TRANSFORM3D
-        real_t, // PLANE
-        real_t, // BASIS
-        real_t, // PROJECTION
-        real_t, // QUATERNION
-        real_t // RECT3 (AABB)
-    >;
-
-    
 protected:
     static void _bind_methods();
     
 public:
-    enum SEEK {
-        FROM_START,
-        FROM_CURRENT,
-        FROM_END,
-    };
+    static constexpr uint32_t INVALID = 0xFFFFFFFF; 
     enum ERROR {
         NONE = 0,
         INVALID_STATE,
@@ -177,6 +108,190 @@ public:
         SEEK_ERROR,
         SEEK_AFTER_DATA_RANGE,
         SEEK_BEFORE_DATA_RANGE,
+        INVALID_TYPE_TAG,
+        _ERR_LIMIT,
+        _ERR_INVALID = 0xFFFFFFFF,
+    };
+    enum SEEK {
+        FROM_START = _ERR_LIMIT,
+        FROM_CURRENT,
+        FROM_END,
+        _SEEK_LIMIT,
+        _SEEK_INVALID = 0xFFFFFFFF,
+        _SEEK_MIN = _ERR_LIMIT,
+    };
+    enum GODOT_TYPE {
+        BOOLEAN = _SEEK_LIMIT,
+        INTEGER,
+        FLOAT,
+        VEC_2,
+        VEC_2I,
+        VEC_3,
+        VEC_3I,
+        VEC_4,
+        VEC_4I,
+        COLOR,
+        RECT_2,
+        RECT_2I,
+        AABB,
+        PLANE,
+        BASIS,
+        TRANSFORM_2D,
+        TRANSFORM_3D,
+        QUATERNION,
+        PROJECTION,
+        STRING,
+        ANY,
+        _GD_TYPE_LIMIT,
+        _GD_TYPE_INVALID = 0xFFFFFFFF,
+        RECT_3 = AABB,
+        _GD_TYPE_MIN = _SEEK_LIMIT,
+    };
+    static constexpr uint32_t GODOT_ELEM_COUNT[] = {
+        1,// BOOL,
+        1,// INT,
+        1,// FLOAT,
+        2,// VEC_2,
+        2,// VEC_2I,
+        3,// VEC_3,
+        3,// VEC_3I,
+        4,// VEC_4,
+        4,// VEC_4I,
+        4,// COLOR,
+        4,// RECT_2,
+        4,// RECT_2I,
+        6,// AABB,
+        4,// PLANE,
+        9,// BASIS,
+        6,// TRANSFORM_2D,
+        12,// TRANSFORM_3D,
+        4,// QUATERNION,
+        16,// PROJECTION,
+        1,// STRING,
+        1,// VARIANT
+    };
+    using T_NATIVE_ELEM_LIST = std::tuple<
+        bool,// BOOL,
+        int64_t,// INT,
+        double,// FLOAT,
+        real_t,// VEC_2,
+        int32_t,// VEC_2I,
+        real_t,// VEC_3,
+        int32_t,// VEC_3I,
+        real_t,// VEC_4,
+        int32_t,// VEC_4I,
+        float,// COLOR,
+        real_t,// RECT_2,
+        int32_t,// RECT_2I,
+        real_t,// AABB,
+        real_t,// PLANE,
+        real_t,// BASIS,
+        real_t,// TRANSFORM_2D,
+        real_t,// TRANSFORM_3D,
+        real_t,// QUATERNION,
+        real_t,// PROJECTION,
+        uint32_t,// STRING,
+        void// VARIANT,
+    >;
+    
+    enum SERIAL_TYPE {
+        BOOL = _GD_TYPE_LIMIT,
+        U8,
+        I8,
+        U16,
+        I16,
+        U32,
+        I32,
+        U64,
+        I64,
+        F16,
+        F32,
+        F64,
+        DEFAULT,
+        _SERIAL_TYPE_LIMIT,
+        _SERIAL_INVALID = 0xFFFFFFFF,
+        _SERIAL_TYPE_MIN = _GD_TYPE_LIMIT,
+        REAL = sizeof(real_t) == 4 ? F32 : F64,
+    };
+    using T_SERIAL_TYPE_LIST = std::tuple<
+        bool, // BOOL,
+        uint8_t,// U8,
+        int8_t,// I8,
+        uint16_t,// U16,
+        int16_t,// I16,
+        uint32_t,// U32,
+        int32_t,// I32,
+        uint64_t,// U64,
+        int64_t,// I64,
+        HalfU16,// F16,
+        float,// F32,
+        double,// F64,
+        void//DEFAULT
+    >;
+    static constexpr uint32_t GODOT_DEFAULT_ELEM[] = {
+        BOOL,// BOOL,
+        I64,// INT,
+        F64,// FLOAT,
+        REAL,// VEC_2,
+        I32,// VEC_2I,
+        REAL,// VEC_3,
+        I32,// VEC_3I,
+        REAL,// VEC_4,
+        I32,// VEC_4I,
+        F32,// COLOR,
+        REAL,// RECT_2,
+        I32,// RECT_2I,
+        REAL,// AABB,
+        REAL,// PLANE,
+        REAL,// BASIS,
+        REAL,// TRANSFORM_2D,
+        REAL,// TRANSFORM_3D,
+        REAL,// QUATERNION,
+        REAL,// PROJECTION,
+        U32,// STRING,
+        _SERIAL_INVALID// VARIANT,
+    };
+    static constexpr uint32_t VARIANT_TYPE_TO_GODOT_TYPE[] = {
+        _GD_TYPE_INVALID,// NIL,
+		BOOLEAN,// BOOL,
+		INTEGER,// INT,
+		FLOAT,// FLOAT,
+		STRING,// STRING,
+		VEC_2,// VECTOR2,
+		VEC_2I,// VECTOR2I,
+		RECT_2,// RECT2,
+		RECT_2I,// RECT2I,
+		VEC_3,// VECTOR3,
+		VEC_3I,// VECTOR3I,
+		TRANSFORM_2D,// TRANSFORM2D,
+		VEC_4,// VECTOR4,
+		VEC_4I,// VECTOR4I,
+		PLANE,// PLANE,
+		QUATERNION,// QUATERNION,
+		AABB,// AABB,
+		BASIS,// BASIS,
+		TRANSFORM_3D,// TRANSFORM3D,
+		PROJECTION,// PROJECTION,
+		COLOR,// COLOR,
+		_GD_TYPE_INVALID,// STRING_NAME,
+		_GD_TYPE_INVALID,// NODE_PATH,
+		_GD_TYPE_INVALID,// RID,
+		_GD_TYPE_INVALID,// OBJECT,
+		_GD_TYPE_INVALID,// CALLABLE,
+		_GD_TYPE_INVALID,// SIGNAL,
+		_GD_TYPE_INVALID,// DICTIONARY,
+		_GD_TYPE_INVALID,// ARRAY,
+		_GD_TYPE_INVALID,// PACKED_BYTE_ARRAY,
+		_GD_TYPE_INVALID,// PACKED_INT32_ARRAY,
+		_GD_TYPE_INVALID,// PACKED_INT64_ARRAY,
+		_GD_TYPE_INVALID,// PACKED_FLOAT32_ARRAY,
+		_GD_TYPE_INVALID,// PACKED_FLOAT64_ARRAY,
+		_GD_TYPE_INVALID,// PACKED_STRING_ARRAY,
+		_GD_TYPE_INVALID,// PACKED_VECTOR2_ARRAY,
+		_GD_TYPE_INVALID,// PACKED_VECTOR3_ARRAY,
+		_GD_TYPE_INVALID,// PACKED_COLOR_ARRAY,
+		_GD_TYPE_INVALID,// PACKED_VECTOR4_ARRAY,
+		_GD_TYPE_INVALID,// VARIANT_MAX
     };
 
     ReaderWriter() = default;
@@ -255,16 +370,21 @@ public:
     inline bool write_t_cast_val(T_NATIVE val_src);
 
     template<typename T_SERIAL, typename T_NATIVE, typename T_NATIVE_ELEM, uint32_t T_NATIVE_ELEM_COUNT>
-    inline T_NATIVE get_gds();
+    inline T_NATIVE get_gds_impl();
 
     template<typename T_SERIAL, typename T_NATIVE, typename T_NATIVE_ELEM, uint32_t T_NATIVE_ELEM_COUNT>
-    inline T_NATIVE read_gds();
+    inline T_NATIVE read_gds_impl();
 
     template<typename T_SERIAL, typename T_NATIVE, typename T_NATIVE_ELEM, uint32_t T_NATIVE_ELEM_COUNT>
-    inline bool set_gds(T_NATIVE val);
+    inline bool set_gds_impl(T_NATIVE val);
 
     template<typename T_SERIAL, typename T_NATIVE, typename T_NATIVE_ELEM, uint32_t T_NATIVE_ELEM_COUNT>
-    inline bool write_gds(T_NATIVE val);
+    inline bool write_gds_impl(T_NATIVE val);
+
+    Variant get_gds(GODOT_TYPE type, SERIAL_TYPE serial_type = SERIAL_TYPE::DEFAULT);
+    Variant read_gds(GODOT_TYPE type, SERIAL_TYPE serial_type = SERIAL_TYPE::DEFAULT);
+    bool set_gds(GODOT_TYPE type, Variant val, SERIAL_TYPE serial_type = SERIAL_TYPE::DEFAULT);
+    bool write_gds(GODOT_TYPE type, Variant val, SERIAL_TYPE serial_type = SERIAL_TYPE::DEFAULT);
 
     template<typename T>
     inline bool get_t_array(T* val_dst, uint32_t count);
@@ -364,7 +484,7 @@ public:
     
 
     _FORCE_INLINE_ static Ref<ReaderWriter_FileAccess> from_file_access(Ref<FileAccess> file_access);
-    _FORCE_INLINE_ static Ref<ReaderWriter> from_packed_byte_array(PackedByteArray file_access);
+    _FORCE_INLINE_ static Ref<ReaderWriter_PackedByteArray> from_packed_byte_array(PackedByteArray file_access);
     // _FORCE_INLINE_ static Ref<ReaderWriter> from_stream_peer(Ref<StreamPeer> stream);
     // _FORCE_INLINE_ static Ref<ReaderWriter> from_raw_ptr(void* ptr);
     // _FORCE_INLINE_ static Ref<ReaderWriter> from_raw_ptr_with_stride(void* ptr, int64_t stride);

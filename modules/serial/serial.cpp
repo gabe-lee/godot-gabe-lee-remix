@@ -1,8 +1,27 @@
 
 #include "serial.h"
+#include "core/error/error_macros.h"
+#include "core/math/aabb.h"
+#include "core/math/color.h"
+#include "core/math/math_defs.h"
+#include "core/math/projection.h"
+#include "core/math/quaternion.h"
+#include "core/math/rect2.h"
+#include "core/math/vector2.h"
 #include "core/object/class_db.h"
+#include "core/variant/variant.h"
+#include <cstdint>
 #include <type_traits>
 
+#define RW_ERR_FAIL_V_MSG(m_err, m_ret, m_msg) \
+add_error(m_err);\
+ERR_FAIL_V_MSG(m_ret, m_msg);
+
+#define RW_ERR_FAIL_COND_V_MSG(m_cond, m_err, m_ret, m_msg) \
+if (cond) {\
+    add_error(m_err);\
+    ERR_FAIL_V_MSG(m_ret, m_msg); \
+}
 
 uint16_t HalfU16::float_to_half_u16(float f) {
     uint32_t ia = float_as_uint32(f);
@@ -155,6 +174,11 @@ bind_gds_array_cast_len_pfx(uint64_t, u64, m_packed, m_array, m_native, m_native
 bind_gds_array_cast_len_pfx(int64_t, i64, m_packed, m_array, m_native, m_native_name, m_native_elem, m_native_count)
 
 void ReaderWriter::add_result(int64_t p_seek_delta, uint32_t p_bytes_read_or_written, uint8_t p_error) {
+    add_error(p_error);
+    last_seek_delta = p_seek_delta;
+    last_bytes_read_or_written = p_bytes_read_or_written;
+}
+void ReaderWriter::add_error(uint8_t p_error) {
     if (p_error != ERROR::NONE) {
         if (first_error == ERROR::NONE) {
             first_error = p_error;
@@ -162,11 +186,6 @@ void ReaderWriter::add_result(int64_t p_seek_delta, uint32_t p_bytes_read_or_wri
         num_errors += 1;
         last_error = p_error;
     }
-    last_seek_delta = p_seek_delta;
-    last_bytes_read_or_written = p_bytes_read_or_written;
-}
-void ReaderWriter::add_error(uint8_t p_error) {
-    return add_result(0, 0, p_error);
 }
 
 void ReaderWriter::_bind_methods() {
@@ -182,45 +201,50 @@ void ReaderWriter::_bind_methods() {
     BIND_ENUM_CONSTANT(ERROR::SEEK_BEFORE_DATA_RANGE);
     ClassDB::bind_method(D_METHOD("get_read_pos"), &ReaderWriter::get_read_pos);
     ClassDB::bind_method(D_METHOD("get_write_pos"), &ReaderWriter::get_write_pos);
+    ClassDB::bind_method(D_METHOD("get_num_errors"), &ReaderWriter::get_num_errors);
+    ClassDB::bind_method(D_METHOD("get_last_seek_delta"), &ReaderWriter::get_last_seek_delta);
+    ClassDB::bind_method(D_METHOD("clear_errors"), &ReaderWriter::clear_errors);
+    ClassDB::bind_method(D_METHOD("has_errors"), &ReaderWriter::has_errors);
+    ClassDB::bind_method(D_METHOD("get_last_bytes_read_or_written"), &ReaderWriter::get_last_bytes_read_or_written);
     ClassDB::bind_method(D_METHOD("seek_read_pos", "delta", "from"), &ReaderWriter::seek_read_pos);
     ClassDB::bind_method(D_METHOD("seek_write_pos", "delta", "from"), &ReaderWriter::seek_write_pos);
-    bind_gds_single_int_elems(int64_t, integer, int64_t, 1);
-    bind_gds_single_float_elems(double, float, double, 1);
-    bind_gds_single(bool, bool, bool, bool, 1);
-    bind_gds_single_float_elems(Vector2, vec2, real_t, 2);
-    bind_gds_single_int_elems(Vector2i, vec2i, int32_t, 2);
-    bind_gds_single_float_elems(Vector3, vec3, real_t, 3);
-    bind_gds_single_int_elems(Vector3i, vec3i, int32_t, 3);
-    bind_gds_single_float_elems(Vector4, vec4, real_t, 4);
-    bind_gds_single_int_elems(Vector4i, vec4i, int32_t, 4);
-    bind_gds_single_float_elems(Rect2, rect2, real_t, 4);
-    bind_gds_single_int_elems(Rect2i, rect2i, int32_t, 4);
-    bind_gds_single_float_elems(Color, color, float, 4);
-    bind_gds_single_float_elems(Plane, plane, real_t, 4);
-    bind_gds_single_float_elems(AABB, aabb, real_t, 6);
-    bind_gds_single_float_elems(Transform2D, transform2d, real_t, 6);
-    bind_gds_single_float_elems(Transform3D, transform3d, real_t, 12);
-    bind_gds_single_float_elems(Projection, projection, real_t, 16);
-    bind_gds_single_float_elems(Basis, basis, real_t, 9);
+    // bind_gds_single_int_elems(int64_t, integer, int64_t, 1);
+    // bind_gds_single_float_elems(double, float, double, 1);
+    // bind_gds_single(bool, bool, bool, bool, 1);
+    // bind_gds_single_float_elems(Vector2, vec2, real_t, 2);
+    // bind_gds_single_int_elems(Vector2i, vec2i, int32_t, 2);
+    // bind_gds_single_float_elems(Vector3, vec3, real_t, 3);
+    // bind_gds_single_int_elems(Vector3i, vec3i, int32_t, 3);
+    // bind_gds_single_float_elems(Vector4, vec4, real_t, 4);
+    // bind_gds_single_int_elems(Vector4i, vec4i, int32_t, 4);
+    // bind_gds_single_float_elems(Rect2, rect2, real_t, 4);
+    // bind_gds_single_int_elems(Rect2i, rect2i, int32_t, 4);
+    // bind_gds_single_float_elems(Color, color, float, 4);
+    // bind_gds_single_float_elems(Plane, plane, real_t, 4);
+    // bind_gds_single_float_elems(AABB, aabb, real_t, 6);
+    // bind_gds_single_float_elems(Transform2D, transform2d, real_t, 6);
+    // bind_gds_single_float_elems(Transform3D, transform3d, real_t, 12);
+    // bind_gds_single_float_elems(Projection, projection, real_t, 16);
+    // bind_gds_single_float_elems(Basis, basis, real_t, 9);
 
-    bind_gds_array_int_elems(int64_t,, Array, integer, int64_t, 1);
-    bind_gds_array_float_elems(double,, Array, float, double, 1);
-    bind_gds_array(bool,, Array, bool, bool, bool, 1);
-    bind_gds_array_float_elems(Vector2,, Array, vec2, real_t, 2);
-    bind_gds_array_int_elems(Vector2i,, Array, vec2i, int32_t,2 );
-    bind_gds_array_float_elems(Vector3,, Array, vec3, real_t, 3);
-    bind_gds_array_int_elems(Vector3i,, Array, vec3i, int32_t, 3);
-    bind_gds_array_float_elems(Vector4,, Array, vec4, real_t, 4);
-    bind_gds_array_int_elems(Vector4i,, Array, vec4i, int32_t, 4);
-    bind_gds_array_float_elems(Rect2,, Array, rect2, real_t, 4);
-    bind_gds_array_int_elems(Rect2i,, Array, rect2i, int32_t, 4);
-    bind_gds_array_float_elems(Color,, Array, color, float, 4);
-    bind_gds_array_float_elems(Plane,, Array, plane, real_t, 4);
-    bind_gds_array_float_elems(AABB,, Array, aabb, real_t, 6);
-    bind_gds_array_float_elems(Transform2D,, Array, transform2d, real_t, 6);
-    bind_gds_array_float_elems(Transform3D,, Array, transform3d, real_t, 12);
-    bind_gds_array_float_elems(Projection,, Array, projection, real_t, 16);
-    bind_gds_array_float_elems(Basis,, Array, basis, real_t, 9);
+    // bind_gds_array_int_elems(int64_t,, Array, integer, int64_t, 1);
+    // bind_gds_array_float_elems(double,, Array, float, double, 1);
+    // bind_gds_array(bool,, Array, bool, bool, bool, 1);
+    // bind_gds_array_float_elems(Vector2,, Array, vec2, real_t, 2);
+    // bind_gds_array_int_elems(Vector2i,, Array, vec2i, int32_t,2 );
+    // bind_gds_array_float_elems(Vector3,, Array, vec3, real_t, 3);
+    // bind_gds_array_int_elems(Vector3i,, Array, vec3i, int32_t, 3);
+    // bind_gds_array_float_elems(Vector4,, Array, vec4, real_t, 4);
+    // bind_gds_array_int_elems(Vector4i,, Array, vec4i, int32_t, 4);
+    // bind_gds_array_float_elems(Rect2,, Array, rect2, real_t, 4);
+    // bind_gds_array_int_elems(Rect2i,, Array, rect2i, int32_t, 4);
+    // bind_gds_array_float_elems(Color,, Array, color, float, 4);
+    // bind_gds_array_float_elems(Plane,, Array, plane, real_t, 4);
+    // bind_gds_array_float_elems(AABB,, Array, aabb, real_t, 6);
+    // bind_gds_array_float_elems(Transform2D,, Array, transform2d, real_t, 6);
+    // bind_gds_array_float_elems(Transform3D,, Array, transform3d, real_t, 12);
+    // bind_gds_array_float_elems(Projection,, Array, projection, real_t, 16);
+    // bind_gds_array_float_elems(Basis,, Array, basis, real_t, 9);
     
     // bind_gds_array_int_elems(uint8_t,packed_, PackedByteArray, bytes, uint8_t);
     // bind_gds_array_int_elems(int32_t,packed_, PackedInt32Array, int32, uint8_t);
@@ -242,6 +266,17 @@ uint8_t ReaderWriter::get_first_error() {
 
 uint8_t ReaderWriter::get_last_error() {
     return last_error;
+}
+
+uint32_t ReaderWriter::get_num_errors() {
+    return num_errors;
+}
+
+int64_t ReaderWriter::get_last_seek_delta() {
+    return last_seek_delta;
+}
+uint32_t ReaderWriter::get_last_bytes_read_or_written() {
+    return last_bytes_read_or_written;
 }
 
 template<typename T>
@@ -348,15 +383,15 @@ bool ReaderWriter::write_t_cast_val(T_NATIVE val_src) {
 }
 
 template<typename T_SERIAL, typename T_NATIVE, typename T_NATIVE_ELEM, uint32_t T_NATIVE_ELEM_COUNT>
-T_NATIVE ReaderWriter::get_gds() {
+T_NATIVE ReaderWriter::get_gds_impl() {
     int64_t initial_pos = get_read_pos();
-    T_NATIVE out = read_gds<T_SERIAL, T_NATIVE, T_NATIVE_ELEM, T_NATIVE_ELEM_COUNT>();
+    T_NATIVE out = read_gds_impl<T_SERIAL, T_NATIVE, T_NATIVE_ELEM, T_NATIVE_ELEM_COUNT>();
     seek_read_pos(initial_pos, SEEK::FROM_START);
     return out;
 }
 
 template<typename T_SERIAL, typename T_NATIVE, typename T_NATIVE_ELEM, uint32_t T_NATIVE_ELEM_COUNT>
-T_NATIVE ReaderWriter::read_gds() {
+T_NATIVE ReaderWriter::read_gds_impl() {
     T_NATIVE out;
     if constexpr (std::is_same_v<T_SERIAL, T_NATIVE>) {
         read_bytes(&out, sizeof(T_NATIVE));
@@ -373,15 +408,15 @@ T_NATIVE ReaderWriter::read_gds() {
 }
 
 template<typename T_SERIAL, typename T_NATIVE, typename T_NATIVE_ELEM, uint32_t T_NATIVE_ELEM_COUNT>
-bool ReaderWriter::set_gds(T_NATIVE val) {
+bool ReaderWriter::set_gds_impl(T_NATIVE val) {
     int64_t initial_pos = get_write_pos();
-    bool err = write_gds<T_SERIAL, T_NATIVE, T_NATIVE_ELEM, T_NATIVE_ELEM_COUNT>(val);
+    bool err = write_gds_impl<T_SERIAL, T_NATIVE, T_NATIVE_ELEM, T_NATIVE_ELEM_COUNT>(val);
     seek_write_pos(initial_pos, SEEK::FROM_START);
     return err;
 }
 
 template<typename T_SERIAL, typename T_NATIVE, typename T_NATIVE_ELEM, uint32_t T_NATIVE_ELEM_COUNT>
-bool ReaderWriter::write_gds(T_NATIVE val) {
+bool ReaderWriter::write_gds_impl(T_NATIVE val) {
     if constexpr (std::is_same_v<T_SERIAL, T_NATIVE>) {
         write_bytes(&val, sizeof(T_NATIVE));
     } else if constexpr (std::is_same_v<T_NATIVE, int64_t> || std::is_same_v<T_NATIVE, double> || std::is_same_v<T_NATIVE, bool>) {
@@ -394,6 +429,366 @@ bool ReaderWriter::write_gds(T_NATIVE val) {
         }
     }
     return first_error;
+}
+
+Variant ReaderWriter::get_gds(GODOT_TYPE type, SERIAL_TYPE serial_type) {
+    int64_t initial_pos = get_read_pos();
+    Variant out = read_gds(type, serial_type);
+    seek_read_pos(initial_pos, SEEK::FROM_START);
+    return out;
+}
+Variant ReaderWriter::read_gds(GODOT_TYPE type, SERIAL_TYPE serial_type) {
+    ERR_FAIL_COND_V_MSG(type < _GD_TYPE_MIN || type >= _GD_TYPE_LIMIT, Variant(), "invalid godot type for serialization");
+    ERR_FAIL_COND_V_MSG(serial_type < _SERIAL_TYPE_MIN || serial_type >= _SERIAL_TYPE_LIMIT, Variant(), "invalid serial type");
+    if (type == ANY) {
+        uint32_t type_tag = static_cast<uint32_t>(read_t_val<uint8_t>());
+        if (type_tag < _GD_TYPE_MIN || type_tag >= ANY) {
+            add_error(ERROR::INVALID_TYPE_TAG);
+            ERR_FAIL_V_MSG(Variant(), "invalid type tag in serialized data");
+        }
+        type = (GODOT_TYPE)type_tag;
+    }
+    if (serial_type == SERIAL_TYPE::DEFAULT) {
+        serial_type = (SERIAL_TYPE)GODOT_DEFAULT_ELEM[type - _GD_TYPE_MIN];
+    }
+    switch (type) {
+        case GODOT_TYPE::BOOLEAN: {
+            switch (serial_type) {
+                case BOOL: return Variant(read_gds_impl<bool, bool, bool, 1>());
+                case U8: return Variant(read_gds_impl<uint8_t, bool, bool, 1>());
+                case I8: return Variant(read_gds_impl<int8_t, bool, bool, 1>());
+                case U16: return Variant(read_gds_impl<uint16_t, bool, bool, 1>());
+                case I16: return Variant(read_gds_impl<int16_t, bool, bool, 1>());
+                case U32: return Variant(read_gds_impl<uint32_t, bool, bool, 1>());
+                case I32: return Variant(read_gds_impl<int32_t, bool, bool, 1>());
+                case U64: return Variant(read_gds_impl<uint64_t, bool, bool, 1>());
+                case I64: return Variant(read_gds_impl<int64_t, bool, bool, 1>());
+                case F16: return Variant(read_gds_impl<HalfU16, bool, bool, 1>());
+                case F32: return Variant(read_gds_impl<float, bool, bool, 1>());
+                case F64: return Variant(read_gds_impl<double, bool, bool, 1>());
+                default: ERR_FAIL_V_MSG(Variant(), "invalid serial type for godot boolean");
+            }
+        }
+        case GODOT_TYPE::INTEGER: {
+            switch (serial_type) {
+                case BOOL: return Variant(get_gds_impl<bool, int64_t, int64_t, 1>());
+                case U8: return Variant(get_gds_impl<uint8_t, int64_t, int64_t, 1>());
+                case I8: return Variant(get_gds_impl<int8_t, int64_t, int64_t, 1>());
+                case U16: return Variant(get_gds_impl<uint16_t, int64_t, int64_t, 1>());
+                case I16: return Variant(get_gds_impl<int16_t, int64_t, int64_t, 1>());
+                case U32: return Variant(get_gds_impl<uint32_t, int64_t, int64_t, 1>());
+                case I32: return Variant(get_gds_impl<int32_t, int64_t, int64_t, 1>());
+                case U64: return Variant(get_gds_impl<uint64_t, int64_t, int64_t, 1>());
+                case I64: return Variant(get_gds_impl<int64_t, int64_t, int64_t, 1>());
+                case F16: return Variant(get_gds_impl<HalfU16, int64_t, int64_t, 1>());
+                case F32: return Variant(get_gds_impl<float, int64_t, int64_t, 1>());
+                case F64: return Variant(get_gds_impl<double, int64_t, int64_t, 1>());
+                default: ERR_FAIL_V_MSG(Variant(), "invalid serial type for godot integer");
+            }
+        }
+        case GODOT_TYPE::FLOAT: {
+            switch (serial_type) {
+                case BOOL: return Variant(get_gds_impl<bool, double, double, 1>());
+                case U8: return Variant(get_gds_impl<uint8_t, double, double, 1>());
+                case I8: return Variant(get_gds_impl<int8_t, double, double, 1>());
+                case U16: return Variant(get_gds_impl<uint16_t, double, double, 1>());
+                case I16: return Variant(get_gds_impl<int16_t, double, double, 1>());
+                case U32: return Variant(get_gds_impl<uint32_t, double, double, 1>());
+                case I32: return Variant(get_gds_impl<int32_t, double, double, 1>());
+                case U64: return Variant(get_gds_impl<uint64_t, double, double, 1>());
+                case I64: return Variant(get_gds_impl<int64_t, double, double, 1>());
+                case F16: return Variant(get_gds_impl<HalfU16, double, double, 1>());
+                case F32: return Variant(get_gds_impl<float, double, double, 1>());
+                case F64: return Variant(get_gds_impl<double, double, double, 1>());
+                default: ERR_FAIL_V_MSG(Variant(), "invalid serial type for godot float");
+            }
+        }
+        case GODOT_TYPE::VEC_2: {
+            switch (serial_type) {
+                case BOOL: return Variant(get_gds_impl<bool, Vector2, real_t, 2>());
+                case U8: return Variant(get_gds_impl<uint8_t, Vector2, real_t, 2>());
+                case I8: return Variant(get_gds_impl<int8_t, Vector2, real_t, 2>());
+                case U16: return Variant(get_gds_impl<uint16_t, Vector2, real_t, 2>());
+                case I16: return Variant(get_gds_impl<int16_t, Vector2, real_t, 2>());
+                case U32: return Variant(get_gds_impl<uint32_t, Vector2, real_t, 2>());
+                case I32: return Variant(get_gds_impl<int32_t, Vector2, real_t, 2>());
+                case U64: return Variant(get_gds_impl<uint64_t, Vector2, real_t, 2>());
+                case I64: return Variant(get_gds_impl<int64_t, Vector2, real_t, 2>());
+                case F16: return Variant(get_gds_impl<HalfU16, Vector2, real_t, 2>());
+                case F32: return Variant(get_gds_impl<float, Vector2, real_t, 2>());
+                case F64: return Variant(get_gds_impl<double, Vector2, real_t, 2>());
+                default: ERR_FAIL_V_MSG(Variant(), "invalid serial type for godot Vector2");
+            }
+        }
+        case GODOT_TYPE::VEC_2I: {
+            switch (serial_type) {
+                case BOOL: return Variant(get_gds_impl<bool, Vector2i, int32_t, 2>());
+                case U8: return Variant(get_gds_impl<uint8_t, Vector2i, int32_t, 2>());
+                case I8: return Variant(get_gds_impl<int8_t, Vector2i, int32_t, 2>());
+                case U16: return Variant(get_gds_impl<uint16_t, Vector2i, int32_t, 2>());
+                case I16: return Variant(get_gds_impl<int16_t, Vector2i, int32_t, 2>());
+                case U32: return Variant(get_gds_impl<uint32_t, Vector2i, int32_t, 2>());
+                case I32: return Variant(get_gds_impl<int32_t, Vector2i, int32_t, 2>());
+                case U64: return Variant(get_gds_impl<uint64_t, Vector2i, int32_t, 2>());
+                case I64: return Variant(get_gds_impl<int64_t, Vector2i, int32_t, 2>());
+                case F16: return Variant(get_gds_impl<HalfU16, Vector2i, int32_t, 2>());
+                case F32: return Variant(get_gds_impl<float, Vector2i, int32_t, 2>());
+                case F64: return Variant(get_gds_impl<double, Vector2i, int32_t, 2>());
+                default: ERR_FAIL_V_MSG(Variant(), "invalid serial type for godot Vector2i");
+            }
+        }
+        case GODOT_TYPE::VEC_3: {
+            switch (serial_type) {
+                case BOOL: return Variant(get_gds_impl<bool, Vector3, real_t, 3>());
+                case U8: return Variant(get_gds_impl<uint8_t, Vector3, real_t, 3>());
+                case I8: return Variant(get_gds_impl<int8_t, Vector3, real_t, 3>());
+                case U16: return Variant(get_gds_impl<uint16_t, Vector3, real_t, 3>());
+                case I16: return Variant(get_gds_impl<int16_t, Vector3, real_t, 3>());
+                case U32: return Variant(get_gds_impl<uint32_t, Vector3, real_t, 3>());
+                case I32: return Variant(get_gds_impl<int32_t, Vector3, real_t, 3>());
+                case U64: return Variant(get_gds_impl<uint64_t, Vector3, real_t, 3>());
+                case I64: return Variant(get_gds_impl<int64_t, Vector3, real_t, 3>());
+                case F16: return Variant(get_gds_impl<HalfU16, Vector3, real_t, 3>());
+                case F32: return Variant(get_gds_impl<float, Vector3, real_t, 3>());
+                case F64: return Variant(get_gds_impl<double, Vector3, real_t, 3>());
+                default: ERR_FAIL_V_MSG(Variant(), "invalid serial type for godot Vector3");
+            }
+        }
+        case GODOT_TYPE::VEC_3I: {
+            switch (serial_type) {
+                case BOOL: return Variant(get_gds_impl<bool, Vector3i, int32_t, 3>());
+                case U8: return Variant(get_gds_impl<uint8_t, Vector3i, int32_t, 3>());
+                case I8: return Variant(get_gds_impl<int8_t, Vector3i, int32_t, 3>());
+                case U16: return Variant(get_gds_impl<uint16_t, Vector3i, int32_t, 3>());
+                case I16: return Variant(get_gds_impl<int16_t, Vector3i, int32_t, 3>());
+                case U32: return Variant(get_gds_impl<uint32_t, Vector3i, int32_t, 3>());
+                case I32: return Variant(get_gds_impl<int32_t, Vector3i, int32_t, 3>());
+                case U64: return Variant(get_gds_impl<uint64_t, Vector3i, int32_t, 3>());
+                case I64: return Variant(get_gds_impl<int64_t, Vector3i, int32_t, 3>());
+                case F16: return Variant(get_gds_impl<HalfU16, Vector3i, int32_t, 3>());
+                case F32: return Variant(get_gds_impl<float, Vector3i, int32_t, 3>());
+                case F64: return Variant(get_gds_impl<double, Vector3i, int32_t, 3>());
+                default: ERR_FAIL_V_MSG(Variant(), "invalid serial type for godot Vector3i");
+            }
+        }
+        case GODOT_TYPE::VEC_4: {
+            switch (serial_type) {
+                case BOOL: return Variant(get_gds_impl<bool, Vector4, real_t, 4>());
+                case U8: return Variant(get_gds_impl<uint8_t, Vector4, real_t, 4>());
+                case I8: return Variant(get_gds_impl<int8_t, Vector4, real_t, 4>());
+                case U16: return Variant(get_gds_impl<uint16_t, Vector4, real_t, 4>());
+                case I16: return Variant(get_gds_impl<int16_t, Vector4, real_t, 4>());
+                case U32: return Variant(get_gds_impl<uint32_t, Vector4, real_t, 4>());
+                case I32: return Variant(get_gds_impl<int32_t, Vector4, real_t, 4>());
+                case U64: return Variant(get_gds_impl<uint64_t, Vector4, real_t, 4>());
+                case I64: return Variant(get_gds_impl<int64_t, Vector4, real_t, 4>());
+                case F16: return Variant(get_gds_impl<HalfU16, Vector4, real_t, 4>());
+                case F32: return Variant(get_gds_impl<float, Vector4, real_t, 4>());
+                case F64: return Variant(get_gds_impl<double, Vector4, real_t, 4>());
+                default: ERR_FAIL_V_MSG(Variant(), "invalid serial type for godot Vector4");
+            }
+        }
+        case GODOT_TYPE::VEC_4I: {
+            switch (serial_type) {
+                case BOOL: return Variant(get_gds_impl<bool, Vector4i, int32_t, 4>());
+                case U8: return Variant(get_gds_impl<uint8_t, Vector4i, int32_t, 4>());
+                case I8: return Variant(get_gds_impl<int8_t, Vector4i, int32_t, 4>());
+                case U16: return Variant(get_gds_impl<uint16_t, Vector4i, int32_t, 4>());
+                case I16: return Variant(get_gds_impl<int16_t, Vector4i, int32_t, 4>());
+                case U32: return Variant(get_gds_impl<uint32_t, Vector4i, int32_t, 4>());
+                case I32: return Variant(get_gds_impl<int32_t, Vector4i, int32_t, 4>());
+                case U64: return Variant(get_gds_impl<uint64_t, Vector4i, int32_t, 4>());
+                case I64: return Variant(get_gds_impl<int64_t, Vector4i, int32_t, 4>());
+                case F16: return Variant(get_gds_impl<HalfU16, Vector4i, int32_t, 4>());
+                case F32: return Variant(get_gds_impl<float, Vector4i, int32_t, 4>());
+                case F64: return Variant(get_gds_impl<double, Vector4i, int32_t, 4>());
+                default: ERR_FAIL_V_MSG(Variant(), "invalid serial type for godot Vector4i");
+            }
+        }
+        case GODOT_TYPE::COLOR: {
+            switch (serial_type) {
+                case BOOL: return Variant(get_gds_impl<bool, Color, float, 4>());
+                case U8: return Variant(get_gds_impl<uint8_t, Color, float, 4>());
+                case I8: return Variant(get_gds_impl<int8_t, Color, float, 4>());
+                case U16: return Variant(get_gds_impl<uint16_t, Color, float, 4>());
+                case I16: return Variant(get_gds_impl<int16_t, Color, float, 4>());
+                case U32: return Variant(get_gds_impl<uint32_t, Color, float, 4>());
+                case I32: return Variant(get_gds_impl<int32_t, Color, float, 4>());
+                case U64: return Variant(get_gds_impl<uint64_t, Color, float, 4>());
+                case I64: return Variant(get_gds_impl<int64_t, Color, float, 4>());
+                case F16: return Variant(get_gds_impl<HalfU16, Color, float, 4>());
+                case F32: return Variant(get_gds_impl<float, Color, float, 4>());
+                case F64: return Variant(get_gds_impl<double, Color, float, 4>());
+                default: ERR_FAIL_V_MSG(Variant(), "invalid serial type for godot Color");
+            }
+        }
+        case GODOT_TYPE::RECT_2: {
+            switch (serial_type) {
+                case BOOL: return Variant(get_gds_impl<bool, Rect2, real_t, 4>());
+                case U8: return Variant(get_gds_impl<uint8_t, Rect2, real_t, 4>());
+                case I8: return Variant(get_gds_impl<int8_t, Rect2, real_t, 4>());
+                case U16: return Variant(get_gds_impl<uint16_t, Rect2, real_t, 4>());
+                case I16: return Variant(get_gds_impl<int16_t, Rect2, real_t, 4>());
+                case U32: return Variant(get_gds_impl<uint32_t, Rect2, real_t, 4>());
+                case I32: return Variant(get_gds_impl<int32_t, Rect2, real_t, 4>());
+                case U64: return Variant(get_gds_impl<uint64_t, Rect2, real_t, 4>());
+                case I64: return Variant(get_gds_impl<int64_t, Rect2, real_t, 4>());
+                case F16: return Variant(get_gds_impl<HalfU16, Rect2, real_t, 4>());
+                case F32: return Variant(get_gds_impl<float, Rect2, real_t, 4>());
+                case F64: return Variant(get_gds_impl<double, Rect2, real_t, 4>());
+                default: ERR_FAIL_V_MSG(Variant(), "invalid serial type for godot Rect2");
+            }
+        }
+        case GODOT_TYPE::RECT_2I: {
+            switch (serial_type) {
+                case BOOL: return Variant(get_gds_impl<bool, Rect2i, int32_t, 4>());
+                case U8: return Variant(get_gds_impl<uint8_t, Rect2i, int32_t, 4>());
+                case I8: return Variant(get_gds_impl<int8_t, Rect2i, int32_t, 4>());
+                case U16: return Variant(get_gds_impl<uint16_t, Rect2i, int32_t, 4>());
+                case I16: return Variant(get_gds_impl<int16_t, Rect2i, int32_t, 4>());
+                case U32: return Variant(get_gds_impl<uint32_t, Rect2i, int32_t, 4>());
+                case I32: return Variant(get_gds_impl<int32_t, Rect2i, int32_t, 4>());
+                case U64: return Variant(get_gds_impl<uint64_t, Rect2i, int32_t, 4>());
+                case I64: return Variant(get_gds_impl<int64_t, Rect2i, int32_t, 4>());
+                case F16: return Variant(get_gds_impl<HalfU16, Rect2i, int32_t, 4>());
+                case F32: return Variant(get_gds_impl<float, Rect2i, int32_t, 4>());
+                case F64: return Variant(get_gds_impl<double, Rect2i, int32_t, 4>());
+                default: ERR_FAIL_V_MSG(Variant(), "invalid serial type for godot Rect2i");
+            }
+        }
+        case GODOT_TYPE::AABB: {
+            switch (serial_type) {
+                case BOOL: return Variant(get_gds_impl<bool, ::AABB, real_t, 6>());
+                case U8: return Variant(get_gds_impl<uint8_t, ::AABB, real_t, 6>());
+                case I8: return Variant(get_gds_impl<int8_t, ::AABB, real_t, 6>());
+                case U16: return Variant(get_gds_impl<uint16_t, ::AABB, real_t, 6>());
+                case I16: return Variant(get_gds_impl<int16_t, ::AABB, real_t, 6>());
+                case U32: return Variant(get_gds_impl<uint32_t, ::AABB, real_t, 6>());
+                case I32: return Variant(get_gds_impl<int32_t, ::AABB, real_t, 6>());
+                case U64: return Variant(get_gds_impl<uint64_t, ::AABB, real_t, 6>());
+                case I64: return Variant(get_gds_impl<int64_t, ::AABB, real_t, 6>());
+                case F16: return Variant(get_gds_impl<HalfU16, ::AABB, real_t, 6>());
+                case F32: return Variant(get_gds_impl<float, ::AABB, real_t, 6>());
+                case F64: return Variant(get_gds_impl<double, ::AABB, real_t, 6>());
+                default: ERR_FAIL_V_MSG(Variant(), "invalid serial type for godot AABB");
+            }
+        }
+        case GODOT_TYPE::PLANE: {
+            switch (serial_type) {
+                case BOOL: return Variant(get_gds_impl<bool, Plane, real_t, 4>());
+                case U8: return Variant(get_gds_impl<uint8_t, Plane, real_t, 4>());
+                case I8: return Variant(get_gds_impl<int8_t, Plane, real_t, 4>());
+                case U16: return Variant(get_gds_impl<uint16_t, Plane, real_t, 4>());
+                case I16: return Variant(get_gds_impl<int16_t, Plane, real_t, 4>());
+                case U32: return Variant(get_gds_impl<uint32_t, Plane, real_t, 4>());
+                case I32: return Variant(get_gds_impl<int32_t, Plane, real_t, 4>());
+                case U64: return Variant(get_gds_impl<uint64_t, Plane, real_t, 4>());
+                case I64: return Variant(get_gds_impl<int64_t, Plane, real_t, 4>());
+                case F16: return Variant(get_gds_impl<HalfU16, Plane, real_t, 4>());
+                case F32: return Variant(get_gds_impl<float, Plane, real_t, 4>());
+                case F64: return Variant(get_gds_impl<double, Plane, real_t, 4>());
+                default: ERR_FAIL_V_MSG(Variant(), "invalid serial type for godot Plane");
+            }
+        }
+        case GODOT_TYPE::QUATERNION: {
+            switch (serial_type) {
+                case BOOL: return Variant(get_gds_impl<bool, Quaternion, real_t, 4>());
+                case U8: return Variant(get_gds_impl<uint8_t, Quaternion, real_t, 4>());
+                case I8: return Variant(get_gds_impl<int8_t, Quaternion, real_t, 4>());
+                case U16: return Variant(get_gds_impl<uint16_t, Quaternion, real_t, 4>());
+                case I16: return Variant(get_gds_impl<int16_t, Quaternion, real_t, 4>());
+                case U32: return Variant(get_gds_impl<uint32_t, Quaternion, real_t, 4>());
+                case I32: return Variant(get_gds_impl<int32_t, Quaternion, real_t, 4>());
+                case U64: return Variant(get_gds_impl<uint64_t, Quaternion, real_t, 4>());
+                case I64: return Variant(get_gds_impl<int64_t, Quaternion, real_t, 4>());
+                case F16: return Variant(get_gds_impl<HalfU16, Quaternion, real_t, 4>());
+                case F32: return Variant(get_gds_impl<float, Quaternion, real_t, 4>());
+                case F64: return Variant(get_gds_impl<double, Quaternion, real_t, 4>());
+                default: ERR_FAIL_V_MSG(Variant(), "invalid serial type for godot Quaternion");
+            }
+        }
+        case GODOT_TYPE::BASIS: {
+            switch (serial_type) {
+                case BOOL: return Variant(get_gds_impl<bool, Basis, real_t, 9>());
+                case U8: return Variant(get_gds_impl<uint8_t, Basis, real_t, 9>());
+                case I8: return Variant(get_gds_impl<int8_t, Basis, real_t, 9>());
+                case U16: return Variant(get_gds_impl<uint16_t, Basis, real_t, 9>());
+                case I16: return Variant(get_gds_impl<int16_t, Basis, real_t, 9>());
+                case U32: return Variant(get_gds_impl<uint32_t, Basis, real_t, 9>());
+                case I32: return Variant(get_gds_impl<int32_t, Basis, real_t, 9>());
+                case U64: return Variant(get_gds_impl<uint64_t, Basis, real_t, 9>());
+                case I64: return Variant(get_gds_impl<int64_t, Basis, real_t, 9>());
+                case F16: return Variant(get_gds_impl<HalfU16, Basis, real_t, 9>());
+                case F32: return Variant(get_gds_impl<float, Basis, real_t, 9>());
+                case F64: return Variant(get_gds_impl<double, Basis, real_t, 9>());
+                default: ERR_FAIL_V_MSG(Variant(), "invalid serial type for godot Basis");
+            }
+        }
+        case GODOT_TYPE::TRANSFORM_2D: {
+            switch (serial_type) {
+                case BOOL: return Variant(get_gds_impl<bool, Transform2D, real_t, 6>());
+                case U8: return Variant(get_gds_impl<uint8_t, Transform2D, real_t, 6>());
+                case I8: return Variant(get_gds_impl<int8_t, Transform2D, real_t, 6>());
+                case U16: return Variant(get_gds_impl<uint16_t, Transform2D, real_t, 6>());
+                case I16: return Variant(get_gds_impl<int16_t, Transform2D, real_t, 6>());
+                case U32: return Variant(get_gds_impl<uint32_t, Transform2D, real_t, 6>());
+                case I32: return Variant(get_gds_impl<int32_t, Transform2D, real_t, 6>());
+                case U64: return Variant(get_gds_impl<uint64_t, Transform2D, real_t, 6>());
+                case I64: return Variant(get_gds_impl<int64_t, Transform2D, real_t, 6>());
+                case F16: return Variant(get_gds_impl<HalfU16, Transform2D, real_t, 6>());
+                case F32: return Variant(get_gds_impl<float, Transform2D, real_t, 6>());
+                case F64: return Variant(get_gds_impl<double, Transform2D, real_t, 6>());
+                default: ERR_FAIL_V_MSG(Variant(), "invalid serial type for godot Transform2D");
+            }
+        }
+        case GODOT_TYPE::TRANSFORM_3D: {
+            switch (serial_type) {
+                case BOOL: return Variant(get_gds_impl<bool, Transform3D, real_t, 12>());
+                case U8: return Variant(get_gds_impl<uint8_t, Transform3D, real_t, 12>());
+                case I8: return Variant(get_gds_impl<int8_t, Transform3D, real_t, 12>());
+                case U16: return Variant(get_gds_impl<uint16_t, Transform3D, real_t, 12>());
+                case I16: return Variant(get_gds_impl<int16_t, Transform3D, real_t, 12>());
+                case U32: return Variant(get_gds_impl<uint32_t, Transform3D, real_t, 12>());
+                case I32: return Variant(get_gds_impl<int32_t, Transform3D, real_t, 12>());
+                case U64: return Variant(get_gds_impl<uint64_t, Transform3D, real_t, 12>());
+                case I64: return Variant(get_gds_impl<int64_t, Transform3D, real_t, 12>());
+                case F16: return Variant(get_gds_impl<HalfU16, Transform3D, real_t, 12>());
+                case F32: return Variant(get_gds_impl<float, Transform3D, real_t, 12>());
+                case F64: return Variant(get_gds_impl<double, Transform3D, real_t, 12>());
+                default: ERR_FAIL_V_MSG(Variant(), "invalid serial type for godot Transform3D");
+            }
+        }
+        case GODOT_TYPE::PROJECTION: {
+            switch (serial_type) {
+                case BOOL: return Variant(get_gds_impl<bool, Projection, real_t, 16>());
+                case U8: return Variant(get_gds_impl<uint8_t, Projection, real_t, 16>());
+                case I8: return Variant(get_gds_impl<int8_t, Projection, real_t, 16>());
+                case U16: return Variant(get_gds_impl<uint16_t, Projection, real_t, 16>());
+                case I16: return Variant(get_gds_impl<int16_t, Projection, real_t, 16>());
+                case U32: return Variant(get_gds_impl<uint32_t, Projection, real_t, 16>());
+                case I32: return Variant(get_gds_impl<int32_t, Projection, real_t, 16>());
+                case U64: return Variant(get_gds_impl<uint64_t, Projection, real_t, 16>());
+                case I64: return Variant(get_gds_impl<int64_t, Projection, real_t, 16>());
+                case F16: return Variant(get_gds_impl<HalfU16, Projection, real_t, 16>());
+                case F32: return Variant(get_gds_impl<float, Projection, real_t, 16>());
+                case F64: return Variant(get_gds_impl<double, Projection, real_t, 16>());
+                default: ERR_FAIL_V_MSG(Variant(), "invalid serial type for godot Projection");
+            }
+        }
+        case GODOT_TYPE::STRING: {
+            ERR_FAIL_V_MSG(Variant(), "not implemented for godot String");
+        }
+        default: ERR_FAIL_V_MSG(Variant(), "invalid godot type for serialization");
+    }
+}
+bool ReaderWriter::set_gds(GODOT_TYPE type, Variant val, SERIAL_TYPE serial_type) {
+    int64_t initial_pos = get_write_pos();
+    bool res = write_gds(type, val, serial_type);
+    seek_write_pos(initial_pos, SEEK::FROM_START);
+    return res;
+}
+bool ReaderWriter::write_gds(GODOT_TYPE type, Variant val, SERIAL_TYPE serial_type) {
+    return false; //CHECKPOINT //FIXME
 }
 
 template<typename T>
@@ -521,7 +916,7 @@ T_ARRAY ReaderWriter::read_gds_array(T_ARRAY dest_array, uint32_t array_offset, 
     uint32_t end = array_offset + count;
     dest_array.resize(end);
     for (uint32_t i = array_offset; i < end; i += 1) {
-        dest_array[i] = read_gds<T_SERIAL, T_NATIVE, T_NATIVE_ELEM, T_NATIVE_ELEM_COUNT>();
+        dest_array[i] = read_gds_impl<T_SERIAL, T_NATIVE, T_NATIVE_ELEM, T_NATIVE_ELEM_COUNT>();
     }
     return dest_array;
 }
@@ -539,7 +934,7 @@ bool ReaderWriter::write_gds_array(T_ARRAY src_array, uint32_t array_offset, uin
     uint32_t end = array_offset + count;
     ERR_FAIL_COND_V_MSG(end > static_cast<uint32_t>(src_array.size()), ERROR::ARRAY_SOURCE_TOO_SHORT_FOR_OFFSET_AND_COUNT, "`array_offset` + `count` is greater than the `size()` of the array provided as the data source");
     for (uint32_t i = array_offset; i < end; i += 1) {
-        write_gds<T_SERIAL, T_NATIVE, T_NATIVE_ELEM, T_NATIVE_ELEM_COUNT>(src_array[i]);
+        write_gds_impl<T_SERIAL, T_NATIVE, T_NATIVE_ELEM, T_NATIVE_ELEM_COUNT>(src_array[i]);
     }
     return first_error;
 }
@@ -691,7 +1086,7 @@ T_ARRAY ReaderWriter::read_gds_array_len_prefix(T_ARRAY dest_array, uint32_t arr
     uint32_t end = array_offset + count;
     dest_array.resize(end);
     for (uint32_t i = array_offset; i < end; i += 1) {
-        dest_array[i] = read_gds<T_SERIAL, T_NATIVE, T_NATIVE_ELEM, T_NATIVE_ELEM_COUNT>();
+        dest_array[i] = read_gds_impl<T_SERIAL, T_NATIVE, T_NATIVE_ELEM, T_NATIVE_ELEM_COUNT>();
     }
     return dest_array;
 }
@@ -710,7 +1105,7 @@ bool ReaderWriter::write_gds_array_len_prefix(T_ARRAY src_array, uint32_t array_
     ERR_FAIL_COND_V_MSG(end > static_cast<uint32_t>(src_array.size()), ERROR::ARRAY_SOURCE_TOO_SHORT_FOR_OFFSET_AND_COUNT, "`array_offset` + `count` is greater than the `size()` of the array provided as the data source");
     write_t_val(count);
     for (uint32_t i = array_offset; i < end; i += 1) {
-        write_gds<T_SERIAL, T_NATIVE, T_NATIVE_ELEM, T_NATIVE_ELEM_COUNT>(src_array[i]);
+        write_gds_impl<T_SERIAL, T_NATIVE, T_NATIVE_ELEM, T_NATIVE_ELEM_COUNT>(src_array[i]);
     }
     return first_error;
 }
