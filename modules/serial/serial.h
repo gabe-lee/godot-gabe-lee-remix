@@ -5,11 +5,6 @@
 #include "core/io/stream_peer.h"
 #include "core/math/aabb.h"
 #include "core/math/math_defs.h"
-#include "core/math/projection.h"
-#include "core/math/quaternion.h"
-#include "core/math/rect2.h"
-#include "core/math/transform_2d.h"
-#include "core/math/transform_3d.h"
 #include "core/object/ref_counted.h"
 #include "core/typedefs.h"
 #include "core/variant/type_info.h"
@@ -62,8 +57,7 @@ class ReaderWriter;
 class ReaderWriter_FileAccess;
 class ReaderWriter_PackedByteArray;
 class ReaderWriter_StreamPeer;
-class ReaderWriter_RawPtr;
-class ReaderWriter_RawPtrStride;
+class ReaderWriter_PtrWithLimit;
 
 class ReaderWriter: public RefCounted {
     GDCLASS(ReaderWriter, RefCounted);
@@ -81,14 +75,14 @@ private:
     static constexpr bool ENDIAN_KNOWN = false;
     static constexpr bool TARGET_IS_LITTLE_ENDIAN = true;
 #endif
-private:
+protected:
     int64_t last_seek_delta = 0;
-    uint32_t last_bytes_read_or_written = 0;
+    uint32_t last_bytes_copied = 0;
     uint32_t num_errors = 0;
+    uint32_t num_errors_this_op = 0;
     uint8_t first_error = ERROR::NONE;
     uint8_t last_error = ERROR::NONE;
 
-protected:
     static void _bind_methods();
     
 public:
@@ -96,6 +90,10 @@ public:
     enum ERROR {
         NONE = 0,
         INVALID_STATE,
+        INVALID_ENUM_INPUT,
+        INVALID_TYPE_TAG,
+        READ_ERROR,
+        WRITE_ERROR,
         OUT_OF_DATA_TO_READ,
         OUT_OF_SPACE_TO_WRITE,
         ARRAY_SOURCE_TOO_SHORT_FOR_OFFSET_AND_COUNT,
@@ -108,7 +106,6 @@ public:
         SEEK_ERROR,
         SEEK_AFTER_DATA_RANGE,
         SEEK_BEFORE_DATA_RANGE,
-        INVALID_TYPE_TAG,
         _ERR_LIMIT,
         _ERR_INVALID = 0xFFFFFFFF,
     };
@@ -141,6 +138,18 @@ public:
         QUATERNION,
         PROJECTION,
         STRING,
+        DICTIONARY,
+        ARRAY,
+        PACKED_BYTE_ARRAY,
+        PACKED_INT32_ARRAY,
+        PACKED_INT64_ARRAY,
+        PACKED_FLOAT32_ARRAY,
+        PACKED_FLOAT64_ARRAY,
+        PACKED_STRING_ARRAY,
+        PACKED_VECTOR2_ARRAY,
+        PACKED_VECTOR3_ARRAY,
+        PACKED_VECTOR4_ARRAY,
+        PACKED_COLOR_ARRAY,
         ANY,
         _GD_TYPE_LIMIT,
         _GD_TYPE_INVALID = 0xFFFFFFFF,
@@ -279,18 +288,18 @@ public:
 		_GD_TYPE_INVALID,// OBJECT,
 		_GD_TYPE_INVALID,// CALLABLE,
 		_GD_TYPE_INVALID,// SIGNAL,
-		_GD_TYPE_INVALID,// DICTIONARY,
-		_GD_TYPE_INVALID,// ARRAY,
-		_GD_TYPE_INVALID,// PACKED_BYTE_ARRAY,
-		_GD_TYPE_INVALID,// PACKED_INT32_ARRAY,
-		_GD_TYPE_INVALID,// PACKED_INT64_ARRAY,
-		_GD_TYPE_INVALID,// PACKED_FLOAT32_ARRAY,
-		_GD_TYPE_INVALID,// PACKED_FLOAT64_ARRAY,
-		_GD_TYPE_INVALID,// PACKED_STRING_ARRAY,
-		_GD_TYPE_INVALID,// PACKED_VECTOR2_ARRAY,
-		_GD_TYPE_INVALID,// PACKED_VECTOR3_ARRAY,
-		_GD_TYPE_INVALID,// PACKED_COLOR_ARRAY,
-		_GD_TYPE_INVALID,// PACKED_VECTOR4_ARRAY,
+		DICTIONARY,// DICTIONARY,
+		ARRAY,// ARRAY,
+		PACKED_BYTE_ARRAY,// PACKED_BYTE_ARRAY,
+		PACKED_INT32_ARRAY,// PACKED_INT32_ARRAY,
+		PACKED_INT64_ARRAY,// PACKED_INT64_ARRAY,
+		PACKED_FLOAT32_ARRAY,// PACKED_FLOAT32_ARRAY,
+		PACKED_FLOAT64_ARRAY,// PACKED_FLOAT64_ARRAY,
+		PACKED_STRING_ARRAY,// PACKED_STRING_ARRAY,
+		PACKED_VECTOR2_ARRAY,// PACKED_VECTOR2_ARRAY,
+		PACKED_VECTOR3_ARRAY,// PACKED_VECTOR3_ARRAY,
+		PACKED_COLOR_ARRAY,// PACKED_COLOR_ARRAY,
+		PACKED_VECTOR4_ARRAY,// PACKED_VECTOR4_ARRAY,
 		_GD_TYPE_INVALID,// VARIANT_MAX
     };
 
@@ -300,20 +309,22 @@ public:
     virtual int64_t get_write_pos() = 0;
     virtual bool seek_read_pos(int64_t delta, SEEK from = SEEK::FROM_CURRENT) = 0;
     virtual bool seek_write_pos(int64_t delta, SEEK from = SEEK::FROM_CURRENT) = 0;
-    virtual bool get_bytes(void* data_dst, uint32_t num_bytes) = 0;
-    virtual bool set_bytes(const void* data_src, uint32_t num_bytes) = 0;
-    virtual bool read_bytes(void* data_dst, uint32_t num_bytes) = 0;
-    virtual bool write_bytes(const void* data_src, uint32_t num_bytes) = 0;
+    virtual bool read_bytes(void* data_dst, uint32_t num_bytes, bool no_seek = false, bool no_copy = false) = 0;
+    virtual bool write_bytes(const void* data_src, uint32_t num_bytes, bool no_seek = false, bool no_copy = false) = 0;
 
     _FORCE_INLINE_ void clear_errors();
+    _FORCE_INLINE_ void clear_deltas();
     _FORCE_INLINE_ bool has_errors();
     _FORCE_INLINE_ uint8_t get_first_error();
     _FORCE_INLINE_ uint8_t get_last_error();
     _FORCE_INLINE_ uint32_t get_num_errors();
     _FORCE_INLINE_ int64_t get_last_seek_delta();
-    _FORCE_INLINE_ uint32_t get_last_bytes_read_or_written();
+    _FORCE_INLINE_ uint32_t get_last_bytes_copied();
     inline void add_result(int64_t p_seek_delta, uint32_t p_bytes_read_or_written, uint8_t p_error = ERROR::NONE);
-    _FORCE_INLINE_ void add_error(uint8_t p_error = ERROR::NONE);
+    inline void add_error(uint8_t p_error = ERROR::NONE);
+
+    _FORCE_INLINE_ bool get_bytes(void* data_dst, uint32_t num_bytes);
+    _FORCE_INLINE_ bool set_bytes(const void* data_src, uint32_t num_bytes);
 
     template<typename T>
     inline bool seek_read_by_t_size();
@@ -485,9 +496,9 @@ public:
 
     _FORCE_INLINE_ static Ref<ReaderWriter_FileAccess> from_file_access(Ref<FileAccess> file_access);
     _FORCE_INLINE_ static Ref<ReaderWriter_PackedByteArray> from_packed_byte_array(PackedByteArray file_access);
-    // _FORCE_INLINE_ static Ref<ReaderWriter> from_stream_peer(Ref<StreamPeer> stream);
-    // _FORCE_INLINE_ static Ref<ReaderWriter> from_raw_ptr(void* ptr);
-    // _FORCE_INLINE_ static Ref<ReaderWriter> from_raw_ptr_with_stride(void* ptr, int64_t stride);
+    _FORCE_INLINE_ static Ref<ReaderWriter_StreamPeer> from_stream_peer(Ref<StreamPeer> stream);
+    template<typename T>
+    _FORCE_INLINE_ static Ref<ReaderWriter_PtrWithLimit> from_ptr_with_len(T* ptr, uint64_t ptr_len, bool can_realloc = false);
 };
 
 class ReaderWriter_FileAccess: public ReaderWriter {
@@ -501,87 +512,66 @@ public:
     int64_t get_write_pos() override;
     bool seek_read_pos(int64_t delta, SEEK from = SEEK::FROM_CURRENT) override;
     bool seek_write_pos(int64_t delta, SEEK from = SEEK::FROM_CURRENT) override;
-    bool get_bytes(void* data_dst, uint32_t num_bytes) override;
-    bool set_bytes(const void* data_src, uint32_t num_bytes) override;
-    bool read_bytes(void* data_dst, uint32_t num_bytes) override;
-    bool write_bytes(const void* data_src, uint32_t num_bytes) override;
+    bool read_bytes(void* data_dst, uint32_t num_bytes, bool no_seek, bool no_copy) override;
+    bool write_bytes(const void* data_src, uint32_t num_bytes, bool no_seek, bool no_copy) override;
 };
 
 class ReaderWriter_PackedByteArray: public ReaderWriter {
     GDCLASS(ReaderWriter_PackedByteArray, RefCounted);
-public:
-    PackedByteArray array;
+private:
     int64_t wpos = 0;
     int64_t rpos = 0;
-
+public:
+    PackedByteArray array;
+    
     ReaderWriter_PackedByteArray() = default;
 
     int64_t get_read_pos() override;
     int64_t get_write_pos() override;
     bool seek_read_pos(int64_t delta, SEEK from = SEEK::FROM_CURRENT) override;
     bool seek_write_pos(int64_t delta, SEEK from = SEEK::FROM_CURRENT) override;
-    bool get_bytes(void* data_dst, uint32_t num_bytes) override;
-    bool set_bytes(const void* data_src, uint32_t num_bytes) override;
-    bool read_bytes(void* data_dst, uint32_t num_bytes) override;
-    bool write_bytes(const void* data_src, uint32_t num_bytes) override;
+    bool read_bytes(void* data_dst, uint32_t num_bytes, bool no_seek, bool no_copy) override;
+    bool write_bytes(const void* data_src, uint32_t num_bytes, bool no_seek, bool no_copy) override;
 };
 
-// class ReaderWriter_StreamPeer: public ReaderWriter {
-//     GDCLASS(ReaderWriter_StreamPeer, RefCounted);
-// public:
-//     Ref<StreamPeer> stream;
+class ReaderWriter_StreamPeer: public ReaderWriter {
+    GDCLASS(ReaderWriter_StreamPeer, RefCounted);
+public:
+    Ref<StreamPeer> stream;
 
-//     ReaderWriter_StreamPeer() = default;
+    ReaderWriter_StreamPeer() = default;
 
-//     int64_t get_read_pos() override;
-//     int64_t get_write_pos() override;
-//     bool seek_read_pos(int64_t delta, SEEK from = SEEK::FROM_CURRENT) override;
-//     bool seek_write_pos(int64_t delta, SEEK from = SEEK::FROM_CURRENT) override;
-//     bool get_bytes(void* data_dst, uint32_t num_bytes) override;
-//     bool set_bytes(const void* data_src, uint32_t num_bytes) override;
-//     bool read_bytes(void* data_dst, uint32_t num_bytes) override;
-//     bool write_bytes(const void* data_src, uint32_t num_bytes) override;
-// };
+    int64_t get_read_pos() override;
+    int64_t get_write_pos() override;
+    bool seek_read_pos(int64_t delta, SEEK from = SEEK::FROM_CURRENT) override;
+    bool seek_write_pos(int64_t delta, SEEK from = SEEK::FROM_CURRENT) override;
+    bool read_bytes(void* data_dst, uint32_t num_bytes, bool no_seek, bool no_copy) override;
+    bool write_bytes(const void* data_src, uint32_t num_bytes, bool no_seek, bool no_copy) override;
+};
 
-// class ReaderWriter_RawPtr: public ReaderWriter {
-// public:
-//     void* ptr;
-//     int64_t wpos = 0;
-//     int64_t rpos = 0;
+class ReaderWriter_PtrWithLimit: public ReaderWriter {
+private:
+    uint8_t* ptr;
+    uint64_t limit = 0;
+    int64_t wpos = 0;
+    int64_t rpos = 0;
+    bool can_realloc = false;
+public:
+    ReaderWriter_PtrWithLimit() = default;
+    friend class ReaderWriter;
 
-//     ReaderWriter_RawPtr() = default;
-
-//     int64_t get_read_pos() override;
-//     int64_t get_write_pos() override;
-//     bool seek_read_pos(int64_t delta, SEEK from = SEEK::FROM_CURRENT) override;
-//     bool seek_write_pos(int64_t delta, SEEK from = SEEK::FROM_CURRENT) override;
-//     bool get_bytes(void* data_dst, uint32_t num_bytes) override;
-//     bool set_bytes(const void* data_src, uint32_t num_bytes) override;
-//     bool read_bytes(void* data_dst, uint32_t num_bytes) override;
-//     bool write_bytes(const void* data_src, uint32_t num_bytes) override;
-// };
-
-// class ReaderWriter_RawPtrStride: public ReaderWriter {
-// public:
-//     void* ptr;
-//     int64_t wpos = 0;
-//     int64_t rpos = 0;
-//     int64_t stride = 1;
-
-//     ReaderWriter_RawPtrStride() = default;
-
-//     int64_t get_read_pos() override;
-//     int64_t get_write_pos() override;
-//     bool seek_read_pos(int64_t delta, SEEK from = SEEK::FROM_CURRENT) override;
-//     bool seek_write_pos(int64_t delta, SEEK from = SEEK::FROM_CURRENT) override;
-//     bool get_bytes(void* data_dst, uint32_t num_bytes) override;
-//     bool set_bytes(const void* data_src, uint32_t num_bytes) override;
-//     bool read_bytes(void* data_dst, uint32_t num_bytes) override;
-//     bool write_bytes(const void* data_src, uint32_t num_bytes) override;
-// };
+    int64_t get_read_pos() override;
+    int64_t get_write_pos() override;
+    bool seek_read_pos(int64_t delta, SEEK from = SEEK::FROM_CURRENT) override;
+    bool seek_write_pos(int64_t delta, SEEK from = SEEK::FROM_CURRENT) override;
+    bool read_bytes(void* data_dst, uint32_t num_bytes, bool no_seek, bool no_copy) override;
+    bool write_bytes(const void* data_src, uint32_t num_bytes, bool no_seek, bool no_copy) override;
+};
 
 VARIANT_ENUM_CAST(ReaderWriter::SEEK);
 VARIANT_ENUM_CAST(ReaderWriter::ERROR);
+VARIANT_ENUM_CAST(ReaderWriter::SERIAL_TYPE);
+VARIANT_ENUM_CAST(ReaderWriter::GODOT_TYPE);
 
 class Serializer : public RefCounted {
     GDCLASS(Serializer, RefCounted);
@@ -590,7 +580,6 @@ protected:
     static void _bind_methods();
 
 public:
-    Serializer() = default;
 
     virtual void serialize(Ref<ReaderWriter> reader_writer) = 0;
     virtual void deserialize(Ref<ReaderWriter> reader_writer) = 0;
