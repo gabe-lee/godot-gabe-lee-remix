@@ -7,6 +7,7 @@
 #include "core/variant/dictionary.h"
 #include "core/variant/type_info.h"
 #include "core/variant/variant.h"
+#include "modules/serial/serial.h"
 #include <cstdint>
 
 #define ptrcast(m_type, m_mem) reinterpret_cast<m_type>(m_mem)
@@ -17,8 +18,6 @@ typedef uint32_t Size;
 typedef uint16_t FieldIndex;
 typedef uint16_t TypeIndex;
 typedef uint16_t Gen;
-typedef uint8_t TElem;
-typedef uint8_t TStruct;
 typedef uint8_t TFixed;
 typedef uint8_t TShift;
 typedef uint8_t GrowMode;
@@ -27,9 +26,11 @@ typedef uint8_t TypeFlags;
 class EntityManager : public RefCounted {
     GDCLASS(EntityManager, RefCounted);
 private:
+    using RW = ReaderWriter;
+    using TGodot = RW::GODOT_TYPE;
+    using TSerial = RW::SERIAL_TYPE;
     class IdData {
     private:
-        
 
         static const constexpr Index FREE_BIT = ((Index)1 << ((sizeof(Index) * 8) - 1));
         static const constexpr Index IDX_MASK = FREE_BIT - 1;
@@ -118,17 +119,17 @@ private:
         Size full_stride = 0;
         Size struct_stride = 0;
         Index allowed_id_list_index = 0;
-        TElem elem_t = 0;
-        TStruct struct_t = 0;
+        TSerial elem_t = (TSerial)0;
+        TGodot struct_t = (TGodot)0;
         TFixed struct_elem_count = 0;
         TFixed fixed_len = 0;
 
-        _FORCE_INLINE_ void set_field_type(TElem p_elem_t, TStruct p_struct_t, TFixed p_fixed_len) {
-            elem_t = p_elem_t;
-            struct_t = p_struct_t;
-            struct_elem_count = STRUCT_ELEM_COUNTS[struct_t];
+        _FORCE_INLINE_ void set_field_type(TSerial p_serial_t, TGodot p_godot_t, TFixed p_fixed_len) {
+            elem_t = p_serial_t;
+            struct_t = p_godot_t;
+            struct_elem_count = RW::GODOT_ELEM_COUNT[p_godot_t];
             fixed_len = MAX((TFixed)1, p_fixed_len);
-            struct_stride = static_cast<Size>(ELEM_SIZES[p_elem_t]) * static_cast<Size>(STRUCT_ELEM_COUNTS[p_struct_t]);
+            struct_stride = RW::godot_type_size(p_godot_t);
             full_stride = struct_stride * static_cast<Size>(fixed_len);
         }
 
@@ -160,42 +161,60 @@ private:
         bool exists = false;
     };
 public:
-    enum ELEM {
-        NONE = 0,
-        BOOL = 1,
-        U8,
-        I8,
-        U16,
-        I16,
-        U32,
-        I32,
-        U64,
-        I64,
-        F16,
-        F32,
-        F64,
-        VARIANT,
-        ENTITY_ID,
-        BYTE = U8,
-        INT = I64,
-        FLOAT = F64,
+    enum SERIAL_TYPE {
+        BOOL = RW::SERIAL_TYPE::BOOL,
+        U8 = RW::SERIAL_TYPE::U8,
+        I8 = RW::SERIAL_TYPE::I8,
+        U16 = RW::SERIAL_TYPE::U16,
+        I16 = RW::SERIAL_TYPE::I16,
+        U32 = RW::SERIAL_TYPE::U32,
+        I32 = RW::SERIAL_TYPE::I32,
+        I64 = RW::SERIAL_TYPE::I64,
+        U64 = RW::SERIAL_TYPE::U64,
+        F16 = RW::SERIAL_TYPE::F16,
+        F32 = RW::SERIAL_TYPE::F32,
+        F64 = RW::SERIAL_TYPE::F64,
+        DEFAULT = RW::SERIAL_TYPE::DEFAULT,
+        _SERIAL_TYPE_LIMIT,
+        _SERIAL_TYPE_MIN = BOOL,
+        _SERIAL_TYPE_MAX = DEFAULT,
+        _SERIAL_TYPE_NUM = _SERIAL_TYPE_LIMIT - _SERIAL_TYPE_MIN,
+        _SERIAL_TYPE_BITS = RW::SERIAL_TYPE::_SERIAL_TYPE_BITS,
+        _SERIAL_TYPE_SHIFT = RW::SERIAL_TYPE::_SERIAL_TYPE_SHIFT,
+        _SERIAL_TYPE_MASK_LO = RW::SERIAL_TYPE::_SERIAL_TYPE_MASK,
+        _SERIAL_TYPE_MASK_HI = _SERIAL_TYPE_MASK_LO << _SERIAL_TYPE_SHIFT,
+        REAL = RW::SERIAL_TYPE::REAL,
     };
-    enum STRUCT {
-        SINGLE_VAL = 0,
-        VEC_2 = 1,
-        VEC_3,
-        VEC_4,
-        COLOR_3,
-        COLOR_4,
-        RECT_2,
-        TRANSFORM_2D,
-        PLANE,
-        QUATERNION,
-        AABB,
-        TRANSFORM_3D,
-        PROJECTION,
-        BASIS,
-        RECT_3 = AABB,
+    enum GODOT_TYPE {
+        BOOLEAN = RW::GODOT_TYPE::BOOLEAN,
+        INTEGER = RW::GODOT_TYPE::INTEGER,
+        FLOAT = RW::GODOT_TYPE::FLOAT,
+        VEC_2 = RW::GODOT_TYPE::VEC_2,
+        VEC_2I = RW::GODOT_TYPE::VEC_2I,
+        VEC_3 = RW::GODOT_TYPE::VEC_3,
+        VEC_3I = RW::GODOT_TYPE::VEC_3I,
+        VEC_4 = RW::GODOT_TYPE::VEC_4,
+        VEC_4I = RW::GODOT_TYPE::VEC_4I,
+        RECT_2 = RW::GODOT_TYPE::RECT_2,
+        RECT_2I = RW::GODOT_TYPE::RECT_2I,
+        COLOR = RW::GODOT_TYPE::COLOR,
+        AABB = RW::GODOT_TYPE::AABB,
+        PLANE = RW::GODOT_TYPE::PLANE,
+        BASIS = RW::GODOT_TYPE::BASIS,
+        TRANSFORM_2D = RW::GODOT_TYPE::TRANSFORM_2D,
+        TRANSFORM_3D = RW::GODOT_TYPE::TRANSFORM_3D,
+        QUATERNION = RW::GODOT_TYPE::QUATERNION,
+        PROJECTION = RW::GODOT_TYPE::PROJECTION,
+        ENTITY_ID = RW::GODOT_TYPE::_GD_TYPE_CUSTOM,
+        _GD_TYPE_LIMIT,
+        _GD_TYPE_MIN = BOOLEAN,
+        _GD_TYPE_MAX = PROJECTION,
+        _GD_TYPE_NUM = _GD_TYPE_LIMIT - _GD_TYPE_MIN,
+        _GD_TYPE_BITS = RW::GODOT_TYPE::_GD_TYPE_BITS,
+        _GD_TYPE_SHIFT = RW::GODOT_TYPE::_GD_TYPE_SHIFT,
+        _GD_TYPE_MASK_LO = RW::GODOT_TYPE::_GD_TYPE_MASK,
+        _GD_TYPE_MASK_HI = _GD_TYPE_MASK_LO << _GD_TYPE_SHIFT,
+        RECT_3 = RW::GODOT_TYPE::RECT_3,
     };
     enum GROW {
         GROW_EXACT,
@@ -209,30 +228,12 @@ protected:
 
 private:
     enum LAYOUT {
-        ELEM_MAX = ENTITY_ID,
-        NUM_ELEM_TYPES = ELEM_MAX + 1,
-        ELEM_BITS = 31 - std::__countl_zero((int)ELEM_MAX),
-        ELEM_MASK_LO = (1 << ELEM_BITS) - 1,
-        ELEM_SHIFT = 0,
-        ELEM_MASK_HI = ELEM_MASK_LO << ELEM_SHIFT,
-        STRUCT_MAX = BASIS,
-        NUM_STRUCT_TYPES = STRUCT_MAX + 1,
-        STRUCT_BITS = 31 - std::__countl_zero((int)STRUCT_MAX),
-        STRUCT_MASK_LO = (1 << STRUCT_BITS) - 1,
-        STRUCT_SHIFT = ELEM_BITS,
-        STRUCT_MASK_HI = STRUCT_MASK_LO << STRUCT_SHIFT,
-        FIXED_MAX = 31,
+        FIXED_MAX = 63,
         FIXED_MAX_BIASED = FIXED_MAX + 1,
-        FIXED_BITS = 31 - std::__countl_zero(FIXED_MAX),
+        FIXED_BITS = 6,
         FIXED_MASK_LO = (1 << FIXED_BITS) - 1,
-        FIXED_SHIFT = (int)ELEM_BITS + (int)STRUCT_BITS,
+        FIXED_SHIFT = (unsigned int)_SERIAL_TYPE_BITS + (unsigned int)_GD_TYPE_BITS,
         FIXED_MASK_HI = FIXED_MASK_LO << FIXED_SHIFT,
-    };
-    enum META_FIELD {
-        NORMAL,
-        NEXT_FREE_TRACK,
-        IS_FREE_TRACK,
-        GEN_TRACK,
     };
     enum FLAG {
         AT_LEAST_1_SUB_BYTE_FIELD = 1 << 0,
@@ -246,54 +247,21 @@ private:
         FINALIZED,
         DEINITIALIZED,
     };
-    constexpr static const Size ELEM_SIZES[NUM_ELEM_TYPES] = {
-        0, // NONE
-        1, // BOOL
-        1, // U8
-        1, // I8
-        2, // U16
-        2, // I16
-        4, // U32
-        4, // I32
-        8, // U64
-        8, // I64
-        2, // F16
-        sizeof(float), // F32
-        sizeof(double), // F64
-        sizeof(Variant), // VARIANT
-        sizeof(int64_t), // ENTITY_ID
-    };
-    constexpr static const Size STRUCT_ELEM_COUNTS[NUM_STRUCT_TYPES] = {
-        1, // NONE
-        2, // VEC_2
-        3, // VEC_3
-        4, // VEC_4
-        3, // COLOR_3
-        4, // COLOR_4
-        4, // RECT_2
-        6, // TRANSFORM_2D
-        4, // PLANE
-        4, // QUATERNION
-        6, // AABB
-        12, // TRANSFORM_3D
-        16, // PROJECTION
-        9, // BASIS
-    };
     constexpr static const Size MAX_STRUCT_ELEM_COUNT = 16;
     static const Size VARIANT_SIZE = sizeof(Variant);
     static const Size ENTITY_ID_SIZE = 8;
-    _FORCE_INLINE_ static bool is_bool(TElem p_elem_t) {
-        return p_elem_t == BOOL;
-    }
-    _FORCE_INLINE_ static bool is_int(TElem p_elem_t) {
-        return p_elem_t >= U8 && p_elem_t <= I64;
-    }
-    _FORCE_INLINE_ static bool is_float(TElem p_elem_t) {
-        return p_elem_t >= F16 && p_elem_t <= F64;
-    }
-    _FORCE_INLINE_ static bool elem_is_numeric(TElem p_elem_t) {
-        return p_elem_t >= U8 && p_elem_t <= F64;
-    }
+    // _FORCE_INLINE_ static bool is_bool(TSerial p_serial_t) {
+    //     return p_serial_t == BOOL;
+    // }
+    // _FORCE_INLINE_ static bool is_int(TSerial p_serial_t) {
+    //     return p_serial_t >= U8 && p_serial_t <= I64;
+    // }
+    // _FORCE_INLINE_ static bool is_float(TSerial p_serial_t) {
+    //     return p_serial_t >= F16 && p_serial_t <= F64;
+    // }
+    // _FORCE_INLINE_ static bool elem_is_numeric(TSerial p_serial_t) {
+    //     return p_serial_t >= U8 && p_serial_t <= F64;
+    // }
     
     IdData* id_data = nullptr;
     TypeData* type_data = nullptr;
@@ -324,7 +292,7 @@ private:
     bool set_internal_in_array(IdData p_id_parts, TypeData p_type_data, FieldIndex p_field_index, FieldData p_field_data, Index p_sub_idx, Variant val);
     void ensure_capacity_for_n_entities_internal(TypeData* p_type_data, Size p_count);
     void ensure_capacity_for_n_ids_internal(Size p_count);
-    void define_field_internal(TypeIndex p_type_idx, FieldIndex p_field_idx, TElem p_elem_t, TStruct p_struct_t, TFixed p_fixed_len, bool p_has_allowed_ids, PackedInt32Array p_allowed_ids);
+    void define_field_internal(TypeIndex p_type_idx, FieldIndex p_field_idx, TSerial p_serial_t, TGodot p_godot_t, TFixed p_fixed_len, bool p_has_allowed_ids, PackedInt32Array p_allowed_ids);
 public:
     void clear_entity_list(TypeIndex p_type);
 	void destroy_entity_manager();
@@ -350,18 +318,18 @@ public:
     // Init process
     void define_manager(TypeIndex p_total_num_types);
     void define_type(TypeIndex p_type_idx, FieldIndex p_num_fields);
-    void define_field(TypeIndex p_type_idx, FieldIndex p_field_idx, TElem p_elem);
+    void define_field(TypeIndex p_type_idx, FieldIndex p_field_idx, TSerial p_elem);
     void define_entity_id_field(TypeIndex p_type_idx, FieldIndex p_field_idx, PackedInt32Array p_allowed_fields);
-    void define_struct_field(TypeIndex p_type_idx, FieldIndex p_field_idx, TStruct p_struct, TElem p_elem);
-    void define_fixed_length_array_field(TypeIndex p_type_idx, FieldIndex p_field_idx, TElem p_elem, TFixed p_fixed);
+    void define_struct_field(TypeIndex p_type_idx, FieldIndex p_field_idx, TGodot p_struct, TSerial p_elem);
+    void define_fixed_length_array_field(TypeIndex p_type_idx, FieldIndex p_field_idx, TSerial p_elem, TFixed p_fixed);
     void define_fixed_length_entity_id_array_field(TypeIndex p_type_idx, FieldIndex p_field_idx, TFixed p_fixed, PackedInt32Array p_allowed_fields);
-    void define_fixed_length_struct_array_field(TypeIndex p_type_idx, FieldIndex p_field_idx, TStruct p_struct, TElem p_elem, TFixed p_fixed);
+    void define_fixed_length_struct_array_field(TypeIndex p_type_idx, FieldIndex p_field_idx, TGodot p_struct, TSerial p_elem, TFixed p_fixed);
     void finalize_entity_manager_layout();
 
     EntityManager();
     ~EntityManager();
 };
 
-VARIANT_ENUM_CAST(EntityManager::ELEM);
-VARIANT_ENUM_CAST(EntityManager::STRUCT);
+VARIANT_ENUM_CAST(EntityManager::SERIAL_TYPE);
+VARIANT_ENUM_CAST(EntityManager::GODOT_TYPE);
 VARIANT_ENUM_CAST(EntityManager::GROW);

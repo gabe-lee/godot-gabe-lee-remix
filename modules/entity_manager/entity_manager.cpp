@@ -22,8 +22,7 @@
 #include "utils.hpp"
 
 void EntityManager::_bind_methods() {
-    // bind gdscript visible methods here
-    BIND_ENUM_CONSTANT(NONE);
+    
     BIND_ENUM_CONSTANT(BOOL);
     BIND_ENUM_CONSTANT(U8);
     BIND_ENUM_CONSTANT(I8);
@@ -36,18 +35,20 @@ void EntityManager::_bind_methods() {
     BIND_ENUM_CONSTANT(F16);
     BIND_ENUM_CONSTANT(F32);
     BIND_ENUM_CONSTANT(F64);
+    BIND_ENUM_CONSTANT(DEFAULT);
+
+    BIND_ENUM_CONSTANT(BOOLEAN);
     BIND_ENUM_CONSTANT(FLOAT);
-    BIND_ENUM_CONSTANT(INT);
-    BIND_ENUM_CONSTANT(ENTITY_ID);
-    BIND_ENUM_CONSTANT(VARIANT);
-    BIND_ENUM_CONSTANT(BYTE);
-    BIND_ENUM_CONSTANT(SINGLE_VAL);
+    BIND_ENUM_CONSTANT(INTEGER);
+    BIND_ENUM_CONSTANT(VEC_2I);
     BIND_ENUM_CONSTANT(VEC_2);
     BIND_ENUM_CONSTANT(VEC_3);
+    BIND_ENUM_CONSTANT(VEC_3I);
     BIND_ENUM_CONSTANT(VEC_4);
-    BIND_ENUM_CONSTANT(COLOR_3);
-    BIND_ENUM_CONSTANT(COLOR_4);
+    BIND_ENUM_CONSTANT(VEC_4I);
+    BIND_ENUM_CONSTANT(COLOR);
     BIND_ENUM_CONSTANT(RECT_2);
+    BIND_ENUM_CONSTANT(RECT_2I);
     BIND_ENUM_CONSTANT(TRANSFORM_2D);
     BIND_ENUM_CONSTANT(PLANE);
     BIND_ENUM_CONSTANT(QUATERNION);
@@ -56,10 +57,13 @@ void EntityManager::_bind_methods() {
     BIND_ENUM_CONSTANT(PROJECTION);
     BIND_ENUM_CONSTANT(BASIS);
     BIND_ENUM_CONSTANT(RECT_3);
+    BIND_ENUM_CONSTANT(ENTITY_ID);
+
     BIND_ENUM_CONSTANT(GROW_EXACT);
     BIND_ENUM_CONSTANT(GROW_QUARTER);
     BIND_ENUM_CONSTANT(GROW_HALF);
     BIND_ENUM_CONSTANT(GROW_DOUBLE);
+
     ClassDB::bind_method(D_METHOD("clear_entity_list", "entity_type"), &EntityManager::clear_entity_list);
     ClassDB::bind_method(D_METHOD("destroy_entity_manager"), &EntityManager::destroy_entity_manager);
     ClassDB::bind_method(D_METHOD("entity_list_is_empty", "entity_type"), &EntityManager::entity_list_is_empty);
@@ -224,14 +228,14 @@ bool EntityManager::entity_exists(Id p_id) const {
 bool EntityManager::entity_exists_gdscript(int64_t p_id) const {
     return entity_exists(Id{p_id});
 }
-
+//CHECKPOINT
 void EntityManager::destroy_internal(Index p_id_index, IdData p_id_data, TypeData p_type_data) {
-    Index p_elem_index = p_id_data.get_idx();
+    Index p_serial_type_index = p_id_data.get_idx();
     if (p_type_data.at_least_1_variant_field) {
         for (FieldIndex f = p_type_data.fields_start; f < p_type_data.fields_limit; f += 1) {
             FieldData p_field_data = field_data[f];
             if (p_field_data.elem_t == VARIANT) {
-                Variant* var_ptr = p_field_data.get_elem_ptr_cast<Variant>(p_elem_index);
+                Variant* var_ptr = p_field_data.get_elem_ptr_cast<Variant>(p_serial_type_index);
                 var_ptr->~Variant();
                 memset((void*)var_ptr, 0, sizeof(Variant));
             }
@@ -663,7 +667,7 @@ void EntityManager::define_type(TypeIndex p_type_idx, FieldIndex p_num_fields) {
     type_data[p_type_idx].num_fields = p_num_fields;
 }
 
-void EntityManager::define_field_internal(TypeIndex p_type_idx, FieldIndex p_field_idx, TElem p_elem_t, TStruct p_struct_t, TFixed p_fixed_len, bool p_has_allowed_ids, PackedInt32Array p_allowed_ids) {
+void EntityManager::define_field_internal(TypeIndex p_type_idx, FieldIndex p_field_idx, TSerial p_serial_t, TGodot p_godot_t, TFixed p_fixed_len, bool p_has_allowed_ids, PackedInt32Array p_allowed_ids) {
     if (init_status == SET_TOTAL_TYPES) {
         FieldIndex f = 0;
         for (TypeIndex t = 0; t < num_types; t += 1) {
@@ -683,7 +687,7 @@ void EntityManager::define_field_internal(TypeIndex p_type_idx, FieldIndex p_fie
     FieldIndex fidx = t_data.fields_start + p_field_idx;
     FieldData p_field_data = field_data[fidx];
     ERR_FAIL_COND_MSG(p_field_data.elem_t != 0, "field was already defined");
-    ERR_FAIL_COND_MSG(p_elem_t == 0, "no type data defined at all (resolves to NONE)");
+    ERR_FAIL_COND_MSG(p_serial_t == 0, "no type data defined at all (resolves to NONE)");
     if (p_has_allowed_ids) {
         p_field_data.allowed_id_list_index = total_num_id_fields;
         total_num_id_fields += 1;
@@ -708,30 +712,30 @@ void EntityManager::define_field_internal(TypeIndex p_type_idx, FieldIndex p_fie
     } else {
         p_field_data.allowed_id_list_index = 0;
     }
-    p_field_data.set_field_type(p_elem_t, p_struct_t, p_fixed_len);
+    p_field_data.set_field_type(p_serial_t, p_godot_t, p_fixed_len);
     field_data[fidx] = p_field_data;
 }
-void EntityManager::define_field(TypeIndex p_type_idx, FieldIndex p_field_idx, TElem p_elem) {
-    ERR_FAIL_COND_MSG(p_elem == ENTITY_ID, "the `ENTITY_ID` type must be defined with `add_entity_id_field()` or `add_fixed_length_entity_id_array_field()`");
-    define_field_internal(p_type_idx, p_field_idx, p_elem, NONE, 1, false, PackedInt32Array());
+void EntityManager::define_field(TypeIndex p_type_idx, FieldIndex p_field_idx, TSerial p_serial_type) {
+    ERR_FAIL_COND_MSG(p_serial_type == ENTITY_ID, "the `ENTITY_ID` type must be defined with `add_entity_id_field()` or `add_fixed_length_entity_id_array_field()`");
+    define_field_internal(p_type_idx, p_field_idx, p_serial_type, NONE, 1, false, PackedInt32Array());
 }
 void EntityManager::define_entity_id_field(TypeIndex p_type_idx, FieldIndex p_field_idx, PackedInt32Array p_allowed_ids = PackedInt32Array()) {
     define_field_internal(p_type_idx, p_field_idx, ENTITY_ID, NONE, 1, true, p_allowed_ids);
 }
-void EntityManager::define_struct_field(TypeIndex p_type_idx, FieldIndex p_field_idx, TStruct p_struct, TElem p_elem) {
-    ERR_FAIL_COND_MSG(!elem_is_numeric(p_elem), "only numeric types (INT, FLOAT, U8, I32, I64, etc...) area allowed in `struct` types (VEC_2, VEC_3, COLOR_4, RECT_2, etc...)");
-    define_field_internal(p_type_idx, p_field_idx, p_elem, p_struct, 1, false, PackedInt32Array());
+void EntityManager::define_struct_field(TypeIndex p_type_idx, FieldIndex p_field_idx, TGodot p_struct, TSerial p_serial_type) {
+    ERR_FAIL_COND_MSG(!elem_is_numeric(p_serial_type), "only numeric types (INT, FLOAT, U8, I32, I64, etc...) area allowed in `struct` types (VEC_2, VEC_3, COLOR_4, RECT_2, etc...)");
+    define_field_internal(p_type_idx, p_field_idx, p_serial_type, p_struct, 1, false, PackedInt32Array());
 }
-void EntityManager::define_fixed_length_array_field(TypeIndex p_type_idx, FieldIndex p_field_idx, TElem p_elem, TFixed p_fixed) {
-    ERR_FAIL_COND_MSG(p_elem == ENTITY_ID, "the `ENTITY_ID` type must be defined with `add_entity_id_field()` or `add_fixed_length_entity_id_array_field()`");
-    define_field_internal(p_type_idx, p_field_idx, p_elem, NONE, MAX((FieldType)1, p_fixed), false, PackedInt32Array());
+void EntityManager::define_fixed_length_array_field(TypeIndex p_type_idx, FieldIndex p_field_idx, TSerial p_serial_type, TFixed p_fixed) {
+    ERR_FAIL_COND_MSG(p_serial_type == ENTITY_ID, "the `ENTITY_ID` type must be defined with `add_entity_id_field()` or `add_fixed_length_entity_id_array_field()`");
+    define_field_internal(p_type_idx, p_field_idx, p_serial_type, NONE, MAX((FieldType)1, p_fixed), false, PackedInt32Array());
 }
 void EntityManager::define_fixed_length_entity_id_array_field(TypeIndex p_type_idx, FieldIndex p_field_idx, TFixed p_fixed, PackedInt32Array p_allowed_ids = PackedInt32Array()) {
     define_field_internal(p_type_idx, p_field_idx, ENTITY_ID, NONE, MAX((FieldType)1, p_fixed), true, p_allowed_ids);
 }
-void EntityManager::define_fixed_length_struct_array_field(TypeIndex p_type_idx, FieldIndex p_field_idx, TStruct p_struct, TElem p_elem, TFixed p_fixed) {
-    ERR_FAIL_COND_MSG(!elem_is_numeric(p_elem), "only numeric types (INT, FLOAT, U8, I32, I64, etc...) area allowed in `struct` types (VEC_2, VEC_3, COLOR_4, RECT_2, etc...)");
-    define_field_internal(p_type_idx, p_field_idx, p_elem, p_struct, MAX((FieldType)1, p_fixed), false, PackedInt32Array());
+void EntityManager::define_fixed_length_struct_array_field(TypeIndex p_type_idx, FieldIndex p_field_idx, TGodot p_struct, TSerial p_serial_type, TFixed p_fixed) {
+    ERR_FAIL_COND_MSG(!elem_is_numeric(p_serial_type), "only numeric types (INT, FLOAT, U8, I32, I64, etc...) area allowed in `struct` types (VEC_2, VEC_3, COLOR_4, RECT_2, etc...)");
+    define_field_internal(p_type_idx, p_field_idx, p_serial_type, p_struct, MAX((FieldType)1, p_fixed), false, PackedInt32Array());
 }
 void EntityManager::finalize_entity_manager_layout() {
     ERR_FAIL_COND_MSG(init_status != DEFINING_ALL_FIELDS, "`finalize_entity_system_layout()` must be the FOURTH and final step in the EntitySystem initialization process (after `set_total_types()`, all `define_type()` calls, and all `define_xxxxx_field()` calls)");

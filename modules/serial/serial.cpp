@@ -1,6 +1,5 @@
 
 #include "serial.h"
-#include "core/error/error_macros.h"
 #include "core/io/stream_peer.h"
 #include "core/math/aabb.h"
 #include "core/math/color.h"
@@ -19,12 +18,15 @@
 #include "core/variant/dictionary.h"
 #include "core/variant/variant.h"
 #include <cstdint>
+#include <cstring>
 #include <type_traits>
 
-#define ADD_ERROR_RETURN_FALSE(m_err) { \
-    add_error(m_err); \
-    return false; \
+#define ADD_ERROR_END_OP_BLOCK(m_err) { \
+    end_op_with_error(m_err); \
 }
+
+#define ADD_ERROR_END_OP_RETURN(m_err) \
+return end_op_with_error(m_err);
 
 #define ADD_ERROR_IF(m_cond, m_err) if (m_cond) { \
     add_error(m_err); \
@@ -33,30 +35,34 @@
     add_error(m_err); \
 }
 
-#define ADD_ERROR_RETURN_FALSE_IF(m_cond, m_err) if (m_cond) { \
-    add_error(m_err); \
-    return false; \
+#define DO_THEN_END_OP_RETURN(m_operation) \
+m_operation; \
+return end_op();
+
+#define ADD_ERROR_END_OP_RETURN_IF(m_cond, m_err) \
+if (m_cond) {\
+    return end_op_with_error(m_err); \
 }
 
-#define ADD_ERROR_RETURN_ZERO_IF(m_cond, m_err) if (m_cond) { \
-    add_error(m_err); \
+#define ADD_ERROR_END_OP_RETURN_ZERO_IF(m_cond, m_err) \
+if (m_cond) { \
+    end_op_with_error(m_err); \
     return 0; \
 }
 
-#define ADD_ERROR_RETURN_VARIANT_IF(m_cond, m_err) if (m_cond) { \
-    add_error(m_err); \
+#define ADD_ERROR_END_OP_RETURN_VARIANT_IF(m_cond, m_err) \
+if (m_cond) { \
+    end_op_with_error(m_err); \
     return Variant(); \
 }
 
-#define RW_ERR_FAIL_V_MSG(m_err, m_ret, m_msg) \
-add_error(m_err);\
-ERR_FAIL_V_MSG(m_ret, m_msg);
+#define ADD_ERROR_END_OP_RETURN_VARIANT(m_err) \
+end_op_with_error(m_err); \
+return Variant();
 
-#define RW_ERR_FAIL_COND_V_MSG(m_cond, m_err, m_ret, m_msg) \
-if (cond) {\
-    add_error(m_err);\
-    ERR_FAIL_V_MSG(m_ret, m_msg); \
-}
+#define ADD_ERROR_END_OP_RETURN_ZERO(m_err) \
+end_op_with_error(m_err); \
+return 0; 
 
 uint16_t HalfU16::float_to_half_u16(float f) {
     uint32_t ia = float_as_uint32(f);
@@ -118,13 +124,13 @@ float HalfU16::half_u16_to_float(uint16_t h) {
     return uint32_as_float(bits);
 }
 
-void ReaderWriter::add_result(int64_t p_seek_delta, uint32_t p_bytes_read_or_written, uint8_t p_error) {
+void ReaderWriter::add_result(int64_t p_seek_delta, uint32_t p_bytes_read_or_written, ERROR p_error) {
     add_error(p_error);
     last_seek_delta = p_seek_delta;
     last_bytes_copied = p_bytes_read_or_written;
 }
 
-void ReaderWriter::add_error(uint8_t p_error) {
+void ReaderWriter::add_error(ERROR p_error) {
     if (p_error != ERROR::NONE) {
         if (first_error == ERROR::NONE) {
             first_error = p_error;
@@ -141,9 +147,9 @@ void ReaderWriter::_bind_methods() {
     BIND_ENUM_CONSTANT(SEEK::FROM_START);
 
     BIND_ENUM_CONSTANT(ERROR::NONE);
-    BIND_ENUM_CONSTANT(ERROR::INVALID_STATE);
-    BIND_ENUM_CONSTANT(ERROR::INVALID_ENUM_INPUT);
-    BIND_ENUM_CONSTANT(ERROR::INVALID_TYPE_TAG);
+    BIND_ENUM_CONSTANT(ERROR::INVALID_READER_WRITER);
+    BIND_ENUM_CONSTANT(ERROR::INVALID_SERIAL_TYPE);
+    BIND_ENUM_CONSTANT(ERROR::INVALID_TYPE_TAG_IN_SERIAL_DATA);
     BIND_ENUM_CONSTANT(ERROR::READ_ERROR);
     BIND_ENUM_CONSTANT(ERROR::WRITE_ERROR);
     BIND_ENUM_CONSTANT(ERROR::OUT_OF_DATA_TO_READ);
@@ -210,24 +216,24 @@ void ReaderWriter::_bind_methods() {
     BIND_ENUM_CONSTANT(SERIAL_TYPE::REAL);
 
     ClassDB::bind_method(D_METHOD("clear_errors"), &ReaderWriter::clear_errors);
-    ClassDB::bind_method(D_METHOD("clear_deltas"), &ReaderWriter::clear_deltas);
+    ClassDB::bind_method(D_METHOD("clear_deltas"), &ReaderWriter::start_op);
     ClassDB::bind_method(D_METHOD("has_errors"), &ReaderWriter::has_errors);
     ClassDB::bind_method(D_METHOD("get_first_error"), &ReaderWriter::get_first_error);
     ClassDB::bind_method(D_METHOD("get_last_error"), &ReaderWriter::get_last_error);
     ClassDB::bind_method(D_METHOD("get_num_errors"), &ReaderWriter::get_num_errors);
     ClassDB::bind_method(D_METHOD("get_last_seek_delta"), &ReaderWriter::get_last_seek_delta);
     ClassDB::bind_method(D_METHOD("get_last_bytes_copied"), &ReaderWriter::get_last_bytes_copied);
-    ClassDB::bind_method(D_METHOD("add_result", "seek_delta", "bytes_read_or_written", "error"), &ReaderWriter::add_result);
-    ClassDB::bind_method(D_METHOD("add_error", "error"), &ReaderWriter::add_error);
+    ClassDB::bind_method(D_METHOD("add_result"), &ReaderWriter::add_result);
+    ClassDB::bind_method(D_METHOD("add_error"), &ReaderWriter::add_error);
 
     ClassDB::bind_method(D_METHOD("get_read_pos"), &ReaderWriter::get_read_pos);
     ClassDB::bind_method(D_METHOD("get_write_pos"), &ReaderWriter::get_write_pos);
-    ClassDB::bind_method(D_METHOD("seek_read_pos", "delta_bytes", "from"), &ReaderWriter::seek_read_pos);
-    ClassDB::bind_method(D_METHOD("seek_write_pos", "delta_bytes", "from"), &ReaderWriter::seek_write_pos);
-    ClassDB::bind_method(D_METHOD("get_var", "type", "serial_type"), &ReaderWriter::get_gds);
-    ClassDB::bind_method(D_METHOD("read_var", "type", "serial_type"), &ReaderWriter::read_gds);
-    ClassDB::bind_method(D_METHOD("set_var", "type", "val", "serial_type"), &ReaderWriter::set_gds);
-    ClassDB::bind_method(D_METHOD("write_var", "type", "val", "serial_type"), &ReaderWriter::write_gds);
+    ClassDB::bind_method(D_METHOD("seek_read_pos"), &ReaderWriter::seek_read_pos);
+    ClassDB::bind_method(D_METHOD("seek_write_pos"), &ReaderWriter::seek_write_pos);
+    ClassDB::bind_method(D_METHOD("get_var"), &ReaderWriter::get_gds);
+    ClassDB::bind_method(D_METHOD("read_var"), &ReaderWriter::read_gds);
+    ClassDB::bind_method(D_METHOD("set_var"), &ReaderWriter::set_gds);
+    ClassDB::bind_method(D_METHOD("write_var"), &ReaderWriter::write_gds);
 }
 
 void ReaderWriter::clear_errors() {
@@ -237,26 +243,44 @@ void ReaderWriter::clear_errors() {
     num_errors = 0;
 }
 
-void ReaderWriter::clear_deltas() {
-    last_bytes_copied = 0;
-    last_seek_delta = 0;
-    num_errors_this_op = 0;
+void ReaderWriter::start_op() {
+    if (op_depth == 0) {
+        last_bytes_copied = 0;
+        last_seek_delta = 0;
+        num_errors_this_op = 0;
+    }
+    op_depth += 1;
+}
+
+bool ReaderWriter::end_op() {
+    op_depth -= 1;
+    return num_errors_this_op > 0;
+}
+
+bool ReaderWriter::end_op_with_error(ERROR err) {
+    add_error(err);
+    op_depth -= 1;
+    return num_errors_this_op > 0;
 }
 
 bool ReaderWriter::has_errors() {
     return first_error != ERROR::NONE;
 }
 
-uint8_t ReaderWriter::get_first_error() {
-    return num_errors == 0;
+ReaderWriter::ERROR ReaderWriter::get_first_error() {
+    return first_error;
 }
 
-uint8_t ReaderWriter::get_last_error() {
+ReaderWriter::ERROR ReaderWriter::get_last_error() {
     return last_error;
 }
 
 uint32_t ReaderWriter::get_num_errors() {
     return num_errors;
+}
+
+uint32_t ReaderWriter::get_num_errors_this_op() {
+    return num_errors_this_op;
 }
 
 int64_t ReaderWriter::get_last_seek_delta() {
@@ -326,17 +350,17 @@ bool ReaderWriter::write_t_val(T val) {
 template<typename T_SERIAL, typename T_NATIVE>
 bool ReaderWriter::get_t_cast(T_NATIVE* val_dst) {
     T_SERIAL val_ser;
-    get_bytes(reinterpret_cast<void*>(&val_ser), sizeof(T_SERIAL))
+    bool success = get_bytes(reinterpret_cast<void*>(&val_ser), sizeof(T_SERIAL))
     *val_dst = static_cast<T_NATIVE>(val_ser);
-    return num_errors == 0;
+    return success;
 }
 
 template<typename T_SERIAL, typename T_NATIVE>
 bool ReaderWriter::read_t_cast(T_NATIVE* val_dst) {
     T_SERIAL val_ser;
-    read_bytes(reinterpret_cast<void*>(&val_ser), sizeof(T_SERIAL));
+    bool success = read_bytes(reinterpret_cast<void*>(&val_ser), sizeof(T_SERIAL));
     *val_dst = static_cast<T_NATIVE>(val_ser);
-    return num_errors == 0;
+    return success;
 }
 
 template<typename T_SERIAL, typename T_NATIVE>
@@ -379,14 +403,17 @@ bool ReaderWriter::write_t_cast_val(T_NATIVE val_src) {
 
 template<typename T_SERIAL, typename T_NATIVE, typename T_NATIVE_ELEM, uint32_t T_NATIVE_ELEM_COUNT>
 T_NATIVE ReaderWriter::get_gds_impl() {
+    start_op();
     int64_t initial_pos = get_read_pos();
     T_NATIVE out = read_gds_impl<T_SERIAL, T_NATIVE, T_NATIVE_ELEM, T_NATIVE_ELEM_COUNT>();
     seek_read_pos(initial_pos, SEEK::FROM_START);
+    end_op();
     return out;
 }
 
 template<typename T_SERIAL, typename T_NATIVE, typename T_NATIVE_ELEM, uint32_t T_NATIVE_ELEM_COUNT>
 T_NATIVE ReaderWriter::read_gds_impl() {
+    start_op();
     T_NATIVE out;
     if constexpr (std::is_same_v<T_SERIAL, T_NATIVE>) {
         read_bytes(&out, sizeof(T_NATIVE));
@@ -399,19 +426,22 @@ T_NATIVE ReaderWriter::read_gds_impl() {
             elem_ptr += 1;
         }
     }
+    end_op();
     return out;
 }
 
 template<typename T_SERIAL, typename T_NATIVE, typename T_NATIVE_ELEM, uint32_t T_NATIVE_ELEM_COUNT>
 bool ReaderWriter::set_gds_impl(T_NATIVE val) {
+    start_op();
     int64_t initial_pos = get_write_pos();
-    bool err = write_gds_impl<T_SERIAL, T_NATIVE, T_NATIVE_ELEM, T_NATIVE_ELEM_COUNT>(val);
+    write_gds_impl<T_SERIAL, T_NATIVE, T_NATIVE_ELEM, T_NATIVE_ELEM_COUNT>(val);
     seek_write_pos(initial_pos, SEEK::FROM_START);
-    return err;
+    return end_op();
 }
 
 template<typename T_SERIAL, typename T_NATIVE, typename T_NATIVE_ELEM, uint32_t T_NATIVE_ELEM_COUNT>
 bool ReaderWriter::write_gds_impl(T_NATIVE val) {
+    start_op();
     if constexpr (std::is_same_v<T_SERIAL, T_NATIVE>) {
         write_bytes(&val, sizeof(T_NATIVE));
     } else if constexpr (std::is_same_v<T_NATIVE, int64_t> || std::is_same_v<T_NATIVE, double> || std::is_same_v<T_NATIVE, bool>) {
@@ -423,24 +453,28 @@ bool ReaderWriter::write_gds_impl(T_NATIVE val) {
             elem_ptr += 1;
         }
     }
-    return num_errors == 0;
+    return end_op();
 }
 
 Variant ReaderWriter::get_gds(GODOT_TYPE type, SERIAL_TYPE serial_type) {
+    start_op();
     int64_t initial_pos = get_read_pos();
     Variant out = read_gds(type, serial_type);
     seek_read_pos(initial_pos, SEEK::FROM_START);
+    end_op();
     return out;
 }
 Variant ReaderWriter::read_gds(GODOT_TYPE type, SERIAL_TYPE serial_type) {
-    ERR_FAIL_COND_V_MSG(type < _GD_TYPE_MIN || type >= _GD_TYPE_LIMIT, Variant(), "invalid godot type for serialization");
-    ERR_FAIL_COND_V_MSG(serial_type < _SERIAL_TYPE_MIN || serial_type >= _SERIAL_TYPE_LIMIT, Variant(), "invalid serial type");
+    start_op();
+    ADD_ERROR_END_OP_RETURN_VARIANT_IF(type < _GD_TYPE_MIN || type >= _GD_TYPE_LIMIT, ERROR::INVALID_SERIAL_TYPE);
+    ADD_ERROR_END_OP_RETURN_VARIANT_IF(serial_type < _SERIAL_TYPE_MIN || serial_type >= _SERIAL_TYPE_LIMIT, ERROR::INVALID_SERIAL_TYPE);
     if (type == ANY) {
         uint32_t type_tag = static_cast<uint32_t>(read_t_val<uint8_t>());
-        if (type_tag < _GD_TYPE_MIN || type_tag >= ANY) {
-            add_error(ERROR::INVALID_TYPE_TAG);
-            ERR_FAIL_V_MSG(Variant(), "invalid type tag in serialized data");
+        if (type_tag == NIL) {
+            end_op();
+            return Variant();
         }
+        ADD_ERROR_END_OP_RETURN_VARIANT_IF(type_tag < _GD_TYPE_MIN || type_tag >= ANY, ERROR::INVALID_TYPE_TAG_IN_SERIAL_DATA);
         type = (GODOT_TYPE)type_tag;
     }
     if (serial_type == SERIAL_TYPE::DEFAULT) {
@@ -449,343 +483,343 @@ Variant ReaderWriter::read_gds(GODOT_TYPE type, SERIAL_TYPE serial_type) {
     switch (type) {
         case GODOT_TYPE::BOOLEAN: {
             switch (serial_type) {
-                case BOOL: return Variant(read_gds_impl<bool, bool, bool, 1>());
-                case U8: return Variant(read_gds_impl<uint8_t, bool, bool, 1>());
-                case I8: return Variant(read_gds_impl<int8_t, bool, bool, 1>());
-                case U16: return Variant(read_gds_impl<uint16_t, bool, bool, 1>());
-                case I16: return Variant(read_gds_impl<int16_t, bool, bool, 1>());
-                case U32: return Variant(read_gds_impl<uint32_t, bool, bool, 1>());
-                case I32: return Variant(read_gds_impl<int32_t, bool, bool, 1>());
-                case U64: return Variant(read_gds_impl<uint64_t, bool, bool, 1>());
-                case I64: return Variant(read_gds_impl<int64_t, bool, bool, 1>());
-                case F16: return Variant(read_gds_impl<HalfU16, bool, bool, 1>());
-                case F32: return Variant(read_gds_impl<float, bool, bool, 1>());
-                case F64: return Variant(read_gds_impl<double, bool, bool, 1>());
-                default: ERR_FAIL_V_MSG(Variant(), "invalid serial type for godot boolean");
+                case BOOL: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<bool, bool, bool, 1>())));
+                case U8: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint8_t, bool, bool, 1>())));
+                case I8: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int8_t, bool, bool, 1>())));
+                case U16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint16_t, bool, bool, 1>())));
+                case I16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int16_t, bool, bool, 1>())));
+                case U32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint32_t, bool, bool, 1>())));
+                case I32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int32_t, bool, bool, 1>())));
+                case U64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint64_t, bool, bool, 1>())));
+                case I64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int64_t, bool, bool, 1>())));
+                case F16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<HalfU16, bool, bool, 1>())));
+                case F32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<float, bool, bool, 1>())));
+                case F64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<double, bool, bool, 1>())));
+                default: ADD_ERROR_END_OP_RETURN_VARIANT(ERROR::INVALID_SERIAL_TYPE);
             }
             break;
         }
         case GODOT_TYPE::INTEGER: {
             switch (serial_type) {
-                case BOOL: return Variant(read_gds_impl<bool, int64_t, int64_t, 1>());
-                case U8: return Variant(read_gds_impl<uint8_t, int64_t, int64_t, 1>());
-                case I8: return Variant(read_gds_impl<int8_t, int64_t, int64_t, 1>());
-                case U16: return Variant(read_gds_impl<uint16_t, int64_t, int64_t, 1>());
-                case I16: return Variant(read_gds_impl<int16_t, int64_t, int64_t, 1>());
-                case U32: return Variant(read_gds_impl<uint32_t, int64_t, int64_t, 1>());
-                case I32: return Variant(read_gds_impl<int32_t, int64_t, int64_t, 1>());
-                case U64: return Variant(read_gds_impl<uint64_t, int64_t, int64_t, 1>());
-                case I64: return Variant(read_gds_impl<int64_t, int64_t, int64_t, 1>());
-                case F16: return Variant(read_gds_impl<HalfU16, int64_t, int64_t, 1>());
-                case F32: return Variant(read_gds_impl<float, int64_t, int64_t, 1>());
-                case F64: return Variant(read_gds_impl<double, int64_t, int64_t, 1>());
-                default: ERR_FAIL_V_MSG(Variant(), "invalid serial type for godot integer");
+                case BOOL: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<bool, int64_t, int64_t, 1>())));
+                case U8: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint8_t, int64_t, int64_t, 1>())));
+                case I8: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int8_t, int64_t, int64_t, 1>())));
+                case U16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint16_t, int64_t, int64_t, 1>())));
+                case I16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int16_t, int64_t, int64_t, 1>())));
+                case U32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint32_t, int64_t, int64_t, 1>())));
+                case I32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int32_t, int64_t, int64_t, 1>())));
+                case U64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint64_t, int64_t, int64_t, 1>())));
+                case I64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int64_t, int64_t, int64_t, 1>())));
+                case F16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<HalfU16, int64_t, int64_t, 1>())));
+                case F32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<float, int64_t, int64_t, 1>())));
+                case F64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<double, int64_t, int64_t, 1>())));
+                default: ADD_ERROR_END_OP_RETURN_VARIANT(ERROR::INVALID_SERIAL_TYPE);
             }
             break;
         }
         case GODOT_TYPE::FLOAT: {
             switch (serial_type) {
-                case BOOL: return Variant(read_gds_impl<bool, double, double, 1>());
-                case U8: return Variant(read_gds_impl<uint8_t, double, double, 1>());
-                case I8: return Variant(read_gds_impl<int8_t, double, double, 1>());
-                case U16: return Variant(read_gds_impl<uint16_t, double, double, 1>());
-                case I16: return Variant(read_gds_impl<int16_t, double, double, 1>());
-                case U32: return Variant(read_gds_impl<uint32_t, double, double, 1>());
-                case I32: return Variant(read_gds_impl<int32_t, double, double, 1>());
-                case U64: return Variant(read_gds_impl<uint64_t, double, double, 1>());
-                case I64: return Variant(read_gds_impl<int64_t, double, double, 1>());
-                case F16: return Variant(read_gds_impl<HalfU16, double, double, 1>());
-                case F32: return Variant(read_gds_impl<float, double, double, 1>());
-                case F64: return Variant(read_gds_impl<double, double, double, 1>());
-                default: ERR_FAIL_V_MSG(Variant(), "invalid serial type for godot float");
+                case BOOL: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<bool, double, double, 1>())));
+                case U8: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint8_t, double, double, 1>())));
+                case I8: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int8_t, double, double, 1>())));
+                case U16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint16_t, double, double, 1>())));
+                case I16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int16_t, double, double, 1>())));
+                case U32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint32_t, double, double, 1>())));
+                case I32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int32_t, double, double, 1>())));
+                case U64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint64_t, double, double, 1>())));
+                case I64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int64_t, double, double, 1>())));
+                case F16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<HalfU16, double, double, 1>())));
+                case F32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<float, double, double, 1>())));
+                case F64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<double, double, double, 1>())));
+                default: ADD_ERROR_END_OP_RETURN_VARIANT(ERROR::INVALID_SERIAL_TYPE);
             }
             break;
         }
         case GODOT_TYPE::VEC_2: {
             switch (serial_type) {
-                case BOOL: return Variant(read_gds_impl<bool, Vector2, real_t, 2>());
-                case U8: return Variant(read_gds_impl<uint8_t, Vector2, real_t, 2>());
-                case I8: return Variant(read_gds_impl<int8_t, Vector2, real_t, 2>());
-                case U16: return Variant(read_gds_impl<uint16_t, Vector2, real_t, 2>());
-                case I16: return Variant(read_gds_impl<int16_t, Vector2, real_t, 2>());
-                case U32: return Variant(read_gds_impl<uint32_t, Vector2, real_t, 2>());
-                case I32: return Variant(read_gds_impl<int32_t, Vector2, real_t, 2>());
-                case U64: return Variant(read_gds_impl<uint64_t, Vector2, real_t, 2>());
-                case I64: return Variant(read_gds_impl<int64_t, Vector2, real_t, 2>());
-                case F16: return Variant(read_gds_impl<HalfU16, Vector2, real_t, 2>());
-                case F32: return Variant(read_gds_impl<float, Vector2, real_t, 2>());
-                case F64: return Variant(read_gds_impl<double, Vector2, real_t, 2>());
-                default: ERR_FAIL_V_MSG(Variant(), "invalid serial type for godot Vector2");
+                case BOOL: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<bool, Vector2, real_t, 2>())));
+                case U8: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint8_t, Vector2, real_t, 2>())));
+                case I8: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int8_t, Vector2, real_t, 2>())));
+                case U16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint16_t, Vector2, real_t, 2>())));
+                case I16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int16_t, Vector2, real_t, 2>())));
+                case U32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint32_t, Vector2, real_t, 2>())));
+                case I32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int32_t, Vector2, real_t, 2>())));
+                case U64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint64_t, Vector2, real_t, 2>())));
+                case I64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int64_t, Vector2, real_t, 2>())));
+                case F16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<HalfU16, Vector2, real_t, 2>())));
+                case F32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<float, Vector2, real_t, 2>())));
+                case F64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<double, Vector2, real_t, 2>())));
+                default: ADD_ERROR_END_OP_RETURN_VARIANT(ERROR::INVALID_SERIAL_TYPE);
             }
             break;
         }
         case GODOT_TYPE::VEC_2I: {
             switch (serial_type) {
-                case BOOL: return Variant(read_gds_impl<bool, Vector2i, int32_t, 2>());
-                case U8: return Variant(read_gds_impl<uint8_t, Vector2i, int32_t, 2>());
-                case I8: return Variant(read_gds_impl<int8_t, Vector2i, int32_t, 2>());
-                case U16: return Variant(read_gds_impl<uint16_t, Vector2i, int32_t, 2>());
-                case I16: return Variant(read_gds_impl<int16_t, Vector2i, int32_t, 2>());
-                case U32: return Variant(read_gds_impl<uint32_t, Vector2i, int32_t, 2>());
-                case I32: return Variant(read_gds_impl<int32_t, Vector2i, int32_t, 2>());
-                case U64: return Variant(read_gds_impl<uint64_t, Vector2i, int32_t, 2>());
-                case I64: return Variant(read_gds_impl<int64_t, Vector2i, int32_t, 2>());
-                case F16: return Variant(read_gds_impl<HalfU16, Vector2i, int32_t, 2>());
-                case F32: return Variant(read_gds_impl<float, Vector2i, int32_t, 2>());
-                case F64: return Variant(read_gds_impl<double, Vector2i, int32_t, 2>());
-                default: ERR_FAIL_V_MSG(Variant(), "invalid serial type for godot Vector2i");
+                case BOOL: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<bool, Vector2i, int32_t, 2>())));
+                case U8: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint8_t, Vector2i, int32_t, 2>())));
+                case I8: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int8_t, Vector2i, int32_t, 2>())));
+                case U16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint16_t, Vector2i, int32_t, 2>())));
+                case I16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int16_t, Vector2i, int32_t, 2>())));
+                case U32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint32_t, Vector2i, int32_t, 2>())));
+                case I32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int32_t, Vector2i, int32_t, 2>())));
+                case U64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint64_t, Vector2i, int32_t, 2>())));
+                case I64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int64_t, Vector2i, int32_t, 2>())));
+                case F16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<HalfU16, Vector2i, int32_t, 2>())));
+                case F32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<float, Vector2i, int32_t, 2>())));
+                case F64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<double, Vector2i, int32_t, 2>())));
+                default: ADD_ERROR_END_OP_RETURN_VARIANT(ERROR::INVALID_SERIAL_TYPE);
             }
             break;
         }
         case GODOT_TYPE::VEC_3: {
             switch (serial_type) {
-                case BOOL: return Variant(read_gds_impl<bool, Vector3, real_t, 3>());
-                case U8: return Variant(read_gds_impl<uint8_t, Vector3, real_t, 3>());
-                case I8: return Variant(read_gds_impl<int8_t, Vector3, real_t, 3>());
-                case U16: return Variant(read_gds_impl<uint16_t, Vector3, real_t, 3>());
-                case I16: return Variant(read_gds_impl<int16_t, Vector3, real_t, 3>());
-                case U32: return Variant(read_gds_impl<uint32_t, Vector3, real_t, 3>());
-                case I32: return Variant(read_gds_impl<int32_t, Vector3, real_t, 3>());
-                case U64: return Variant(read_gds_impl<uint64_t, Vector3, real_t, 3>());
-                case I64: return Variant(read_gds_impl<int64_t, Vector3, real_t, 3>());
-                case F16: return Variant(read_gds_impl<HalfU16, Vector3, real_t, 3>());
-                case F32: return Variant(read_gds_impl<float, Vector3, real_t, 3>());
-                case F64: return Variant(read_gds_impl<double, Vector3, real_t, 3>());
-                default: ERR_FAIL_V_MSG(Variant(), "invalid serial type for godot Vector3");
+                case BOOL: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<bool, Vector3, real_t, 3>())));
+                case U8: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint8_t, Vector3, real_t, 3>())));
+                case I8: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int8_t, Vector3, real_t, 3>())));
+                case U16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint16_t, Vector3, real_t, 3>())));
+                case I16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int16_t, Vector3, real_t, 3>())));
+                case U32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint32_t, Vector3, real_t, 3>())));
+                case I32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int32_t, Vector3, real_t, 3>())));
+                case U64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint64_t, Vector3, real_t, 3>())));
+                case I64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int64_t, Vector3, real_t, 3>())));
+                case F16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<HalfU16, Vector3, real_t, 3>())));
+                case F32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<float, Vector3, real_t, 3>())));
+                case F64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<double, Vector3, real_t, 3>())));
+                default: ADD_ERROR_END_OP_RETURN_VARIANT(ERROR::INVALID_SERIAL_TYPE);
             }
             break;
         }
         case GODOT_TYPE::VEC_3I: {
             switch (serial_type) {
-                case BOOL: return Variant(read_gds_impl<bool, Vector3i, int32_t, 3>());
-                case U8: return Variant(read_gds_impl<uint8_t, Vector3i, int32_t, 3>());
-                case I8: return Variant(read_gds_impl<int8_t, Vector3i, int32_t, 3>());
-                case U16: return Variant(read_gds_impl<uint16_t, Vector3i, int32_t, 3>());
-                case I16: return Variant(read_gds_impl<int16_t, Vector3i, int32_t, 3>());
-                case U32: return Variant(read_gds_impl<uint32_t, Vector3i, int32_t, 3>());
-                case I32: return Variant(read_gds_impl<int32_t, Vector3i, int32_t, 3>());
-                case U64: return Variant(read_gds_impl<uint64_t, Vector3i, int32_t, 3>());
-                case I64: return Variant(read_gds_impl<int64_t, Vector3i, int32_t, 3>());
-                case F16: return Variant(read_gds_impl<HalfU16, Vector3i, int32_t, 3>());
-                case F32: return Variant(read_gds_impl<float, Vector3i, int32_t, 3>());
-                case F64: return Variant(read_gds_impl<double, Vector3i, int32_t, 3>());
-                default: ERR_FAIL_V_MSG(Variant(), "invalid serial type for godot Vector3i");
+                case BOOL: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<bool, Vector3i, int32_t, 3>())));
+                case U8: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint8_t, Vector3i, int32_t, 3>())));
+                case I8: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int8_t, Vector3i, int32_t, 3>())));
+                case U16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint16_t, Vector3i, int32_t, 3>())));
+                case I16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int16_t, Vector3i, int32_t, 3>())));
+                case U32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint32_t, Vector3i, int32_t, 3>())));
+                case I32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int32_t, Vector3i, int32_t, 3>())));
+                case U64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint64_t, Vector3i, int32_t, 3>())));
+                case I64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int64_t, Vector3i, int32_t, 3>())));
+                case F16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<HalfU16, Vector3i, int32_t, 3>())));
+                case F32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<float, Vector3i, int32_t, 3>())));
+                case F64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<double, Vector3i, int32_t, 3>())));
+                default: ADD_ERROR_END_OP_RETURN_VARIANT(ERROR::INVALID_SERIAL_TYPE);
             }
             break;
         }
         case GODOT_TYPE::VEC_4: {
             switch (serial_type) {
-                case BOOL: return Variant(read_gds_impl<bool, Vector4, real_t, 4>());
-                case U8: return Variant(read_gds_impl<uint8_t, Vector4, real_t, 4>());
-                case I8: return Variant(read_gds_impl<int8_t, Vector4, real_t, 4>());
-                case U16: return Variant(read_gds_impl<uint16_t, Vector4, real_t, 4>());
-                case I16: return Variant(read_gds_impl<int16_t, Vector4, real_t, 4>());
-                case U32: return Variant(read_gds_impl<uint32_t, Vector4, real_t, 4>());
-                case I32: return Variant(read_gds_impl<int32_t, Vector4, real_t, 4>());
-                case U64: return Variant(read_gds_impl<uint64_t, Vector4, real_t, 4>());
-                case I64: return Variant(read_gds_impl<int64_t, Vector4, real_t, 4>());
-                case F16: return Variant(read_gds_impl<HalfU16, Vector4, real_t, 4>());
-                case F32: return Variant(read_gds_impl<float, Vector4, real_t, 4>());
-                case F64: return Variant(read_gds_impl<double, Vector4, real_t, 4>());
-                default: ERR_FAIL_V_MSG(Variant(), "invalid serial type for godot Vector4");
+                case BOOL: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<bool, Vector4, real_t, 4>())));
+                case U8: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint8_t, Vector4, real_t, 4>())));
+                case I8: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int8_t, Vector4, real_t, 4>())));
+                case U16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint16_t, Vector4, real_t, 4>())));
+                case I16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int16_t, Vector4, real_t, 4>())));
+                case U32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint32_t, Vector4, real_t, 4>())));
+                case I32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int32_t, Vector4, real_t, 4>())));
+                case U64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint64_t, Vector4, real_t, 4>())));
+                case I64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int64_t, Vector4, real_t, 4>())));
+                case F16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<HalfU16, Vector4, real_t, 4>())));
+                case F32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<float, Vector4, real_t, 4>())));
+                case F64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<double, Vector4, real_t, 4>())));
+                default: ADD_ERROR_END_OP_RETURN_VARIANT(ERROR::INVALID_SERIAL_TYPE);
             }
             break;
         }
         case GODOT_TYPE::VEC_4I: {
             switch (serial_type) {
-                case BOOL: return Variant(read_gds_impl<bool, Vector4i, int32_t, 4>());
-                case U8: return Variant(read_gds_impl<uint8_t, Vector4i, int32_t, 4>());
-                case I8: return Variant(read_gds_impl<int8_t, Vector4i, int32_t, 4>());
-                case U16: return Variant(read_gds_impl<uint16_t, Vector4i, int32_t, 4>());
-                case I16: return Variant(read_gds_impl<int16_t, Vector4i, int32_t, 4>());
-                case U32: return Variant(read_gds_impl<uint32_t, Vector4i, int32_t, 4>());
-                case I32: return Variant(read_gds_impl<int32_t, Vector4i, int32_t, 4>());
-                case U64: return Variant(read_gds_impl<uint64_t, Vector4i, int32_t, 4>());
-                case I64: return Variant(read_gds_impl<int64_t, Vector4i, int32_t, 4>());
-                case F16: return Variant(read_gds_impl<HalfU16, Vector4i, int32_t, 4>());
-                case F32: return Variant(read_gds_impl<float, Vector4i, int32_t, 4>());
-                case F64: return Variant(read_gds_impl<double, Vector4i, int32_t, 4>());
-                default: ERR_FAIL_V_MSG(Variant(), "invalid serial type for godot Vector4i");
+                case BOOL: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<bool, Vector4i, int32_t, 4>())));
+                case U8: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint8_t, Vector4i, int32_t, 4>())));
+                case I8: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int8_t, Vector4i, int32_t, 4>())));
+                case U16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint16_t, Vector4i, int32_t, 4>())));
+                case I16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int16_t, Vector4i, int32_t, 4>())));
+                case U32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint32_t, Vector4i, int32_t, 4>())));
+                case I32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int32_t, Vector4i, int32_t, 4>())));
+                case U64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint64_t, Vector4i, int32_t, 4>())));
+                case I64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int64_t, Vector4i, int32_t, 4>())));
+                case F16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<HalfU16, Vector4i, int32_t, 4>())));
+                case F32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<float, Vector4i, int32_t, 4>())));
+                case F64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<double, Vector4i, int32_t, 4>())));
+                default: ADD_ERROR_END_OP_RETURN_VARIANT(ERROR::INVALID_SERIAL_TYPE);
             }
             break;
         }
         case GODOT_TYPE::COLOR: {
             switch (serial_type) {
-                case BOOL: return Variant(read_gds_impl<bool, Color, float, 4>());
-                case U8: return Variant(read_gds_impl<uint8_t, Color, float, 4>());
-                case I8: return Variant(read_gds_impl<int8_t, Color, float, 4>());
-                case U16: return Variant(read_gds_impl<uint16_t, Color, float, 4>());
-                case I16: return Variant(read_gds_impl<int16_t, Color, float, 4>());
-                case U32: return Variant(read_gds_impl<uint32_t, Color, float, 4>());
-                case I32: return Variant(read_gds_impl<int32_t, Color, float, 4>());
-                case U64: return Variant(read_gds_impl<uint64_t, Color, float, 4>());
-                case I64: return Variant(read_gds_impl<int64_t, Color, float, 4>());
-                case F16: return Variant(read_gds_impl<HalfU16, Color, float, 4>());
-                case F32: return Variant(read_gds_impl<float, Color, float, 4>());
-                case F64: return Variant(read_gds_impl<double, Color, float, 4>());
-                default: ERR_FAIL_V_MSG(Variant(), "invalid serial type for godot Color");
+                case BOOL: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<bool, Color, float, 4>())));
+                case U8: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint8_t, Color, float, 4>())));
+                case I8: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int8_t, Color, float, 4>())));
+                case U16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint16_t, Color, float, 4>())));
+                case I16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int16_t, Color, float, 4>())));
+                case U32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint32_t, Color, float, 4>())));
+                case I32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int32_t, Color, float, 4>())));
+                case U64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint64_t, Color, float, 4>())));
+                case I64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int64_t, Color, float, 4>())));
+                case F16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<HalfU16, Color, float, 4>())));
+                case F32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<float, Color, float, 4>())));
+                case F64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<double, Color, float, 4>())));
+                default: ADD_ERROR_END_OP_RETURN_VARIANT(ERROR::INVALID_SERIAL_TYPE);
             }
             break;
         }
         case GODOT_TYPE::RECT_2: {
             switch (serial_type) {
-                case BOOL: return Variant(read_gds_impl<bool, Rect2, real_t, 4>());
-                case U8: return Variant(read_gds_impl<uint8_t, Rect2, real_t, 4>());
-                case I8: return Variant(read_gds_impl<int8_t, Rect2, real_t, 4>());
-                case U16: return Variant(read_gds_impl<uint16_t, Rect2, real_t, 4>());
-                case I16: return Variant(read_gds_impl<int16_t, Rect2, real_t, 4>());
-                case U32: return Variant(read_gds_impl<uint32_t, Rect2, real_t, 4>());
-                case I32: return Variant(read_gds_impl<int32_t, Rect2, real_t, 4>());
-                case U64: return Variant(read_gds_impl<uint64_t, Rect2, real_t, 4>());
-                case I64: return Variant(read_gds_impl<int64_t, Rect2, real_t, 4>());
-                case F16: return Variant(read_gds_impl<HalfU16, Rect2, real_t, 4>());
-                case F32: return Variant(read_gds_impl<float, Rect2, real_t, 4>());
-                case F64: return Variant(read_gds_impl<double, Rect2, real_t, 4>());
-                default: ERR_FAIL_V_MSG(Variant(), "invalid serial type for godot Rect2");
+                case BOOL: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<bool, Rect2, real_t, 4>())));
+                case U8: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint8_t, Rect2, real_t, 4>())));
+                case I8: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int8_t, Rect2, real_t, 4>())));
+                case U16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint16_t, Rect2, real_t, 4>())));
+                case I16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int16_t, Rect2, real_t, 4>())));
+                case U32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint32_t, Rect2, real_t, 4>())));
+                case I32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int32_t, Rect2, real_t, 4>())));
+                case U64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint64_t, Rect2, real_t, 4>())));
+                case I64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int64_t, Rect2, real_t, 4>())));
+                case F16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<HalfU16, Rect2, real_t, 4>())));
+                case F32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<float, Rect2, real_t, 4>())));
+                case F64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<double, Rect2, real_t, 4>())));
+                default: ADD_ERROR_END_OP_RETURN_VARIANT(ERROR::INVALID_SERIAL_TYPE);
             }
             break;
         }
         case GODOT_TYPE::RECT_2I: {
             switch (serial_type) {
-                case BOOL: return Variant(read_gds_impl<bool, Rect2i, int32_t, 4>());
-                case U8: return Variant(read_gds_impl<uint8_t, Rect2i, int32_t, 4>());
-                case I8: return Variant(read_gds_impl<int8_t, Rect2i, int32_t, 4>());
-                case U16: return Variant(read_gds_impl<uint16_t, Rect2i, int32_t, 4>());
-                case I16: return Variant(read_gds_impl<int16_t, Rect2i, int32_t, 4>());
-                case U32: return Variant(read_gds_impl<uint32_t, Rect2i, int32_t, 4>());
-                case I32: return Variant(read_gds_impl<int32_t, Rect2i, int32_t, 4>());
-                case U64: return Variant(read_gds_impl<uint64_t, Rect2i, int32_t, 4>());
-                case I64: return Variant(read_gds_impl<int64_t, Rect2i, int32_t, 4>());
-                case F16: return Variant(read_gds_impl<HalfU16, Rect2i, int32_t, 4>());
-                case F32: return Variant(read_gds_impl<float, Rect2i, int32_t, 4>());
-                case F64: return Variant(read_gds_impl<double, Rect2i, int32_t, 4>());
-                default: ERR_FAIL_V_MSG(Variant(), "invalid serial type for godot Rect2i");
+                case BOOL: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<bool, Rect2i, int32_t, 4>())));
+                case U8: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint8_t, Rect2i, int32_t, 4>())));
+                case I8: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int8_t, Rect2i, int32_t, 4>())));
+                case U16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint16_t, Rect2i, int32_t, 4>())));
+                case I16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int16_t, Rect2i, int32_t, 4>())));
+                case U32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint32_t, Rect2i, int32_t, 4>())));
+                case I32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int32_t, Rect2i, int32_t, 4>())));
+                case U64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint64_t, Rect2i, int32_t, 4>())));
+                case I64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int64_t, Rect2i, int32_t, 4>())));
+                case F16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<HalfU16, Rect2i, int32_t, 4>())));
+                case F32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<float, Rect2i, int32_t, 4>())));
+                case F64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<double, Rect2i, int32_t, 4>())));
+                default: ADD_ERROR_END_OP_RETURN_VARIANT(ERROR::INVALID_SERIAL_TYPE);
             }
             break;
         }
         case GODOT_TYPE::AABB: {
             switch (serial_type) {
-                case BOOL: return Variant(read_gds_impl<bool, ::AABB, real_t, 6>());
-                case U8: return Variant(read_gds_impl<uint8_t, ::AABB, real_t, 6>());
-                case I8: return Variant(read_gds_impl<int8_t, ::AABB, real_t, 6>());
-                case U16: return Variant(read_gds_impl<uint16_t, ::AABB, real_t, 6>());
-                case I16: return Variant(read_gds_impl<int16_t, ::AABB, real_t, 6>());
-                case U32: return Variant(read_gds_impl<uint32_t, ::AABB, real_t, 6>());
-                case I32: return Variant(read_gds_impl<int32_t, ::AABB, real_t, 6>());
-                case U64: return Variant(read_gds_impl<uint64_t, ::AABB, real_t, 6>());
-                case I64: return Variant(read_gds_impl<int64_t, ::AABB, real_t, 6>());
-                case F16: return Variant(read_gds_impl<HalfU16, ::AABB, real_t, 6>());
-                case F32: return Variant(read_gds_impl<float, ::AABB, real_t, 6>());
-                case F64: return Variant(read_gds_impl<double, ::AABB, real_t, 6>());
-                default: ERR_FAIL_V_MSG(Variant(), "invalid serial type for godot AABB");
+                case BOOL: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<bool, ::AABB, real_t, 6>())));
+                case U8: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint8_t, ::AABB, real_t, 6>())));
+                case I8: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int8_t, ::AABB, real_t, 6>())));
+                case U16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint16_t, ::AABB, real_t, 6>())));
+                case I16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int16_t, ::AABB, real_t, 6>())));
+                case U32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint32_t, ::AABB, real_t, 6>())));
+                case I32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int32_t, ::AABB, real_t, 6>())));
+                case U64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint64_t, ::AABB, real_t, 6>())));
+                case I64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int64_t, ::AABB, real_t, 6>())));
+                case F16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<HalfU16, ::AABB, real_t, 6>())));
+                case F32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<float, ::AABB, real_t, 6>())));
+                case F64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<double, ::AABB, real_t, 6>())));
+                default: ADD_ERROR_END_OP_RETURN_VARIANT(ERROR::INVALID_SERIAL_TYPE);
             }
             break;
         }
         case GODOT_TYPE::PLANE: {
             switch (serial_type) {
-                case BOOL: return Variant(read_gds_impl<bool, Plane, real_t, 4>());
-                case U8: return Variant(read_gds_impl<uint8_t, Plane, real_t, 4>());
-                case I8: return Variant(read_gds_impl<int8_t, Plane, real_t, 4>());
-                case U16: return Variant(read_gds_impl<uint16_t, Plane, real_t, 4>());
-                case I16: return Variant(read_gds_impl<int16_t, Plane, real_t, 4>());
-                case U32: return Variant(read_gds_impl<uint32_t, Plane, real_t, 4>());
-                case I32: return Variant(read_gds_impl<int32_t, Plane, real_t, 4>());
-                case U64: return Variant(read_gds_impl<uint64_t, Plane, real_t, 4>());
-                case I64: return Variant(read_gds_impl<int64_t, Plane, real_t, 4>());
-                case F16: return Variant(read_gds_impl<HalfU16, Plane, real_t, 4>());
-                case F32: return Variant(read_gds_impl<float, Plane, real_t, 4>());
-                case F64: return Variant(read_gds_impl<double, Plane, real_t, 4>());
-                default: ERR_FAIL_V_MSG(Variant(), "invalid serial type for godot Plane");
+                case BOOL: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<bool, Plane, real_t, 4>())));
+                case U8: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint8_t, Plane, real_t, 4>())));
+                case I8: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int8_t, Plane, real_t, 4>())));
+                case U16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint16_t, Plane, real_t, 4>())));
+                case I16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int16_t, Plane, real_t, 4>())));
+                case U32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint32_t, Plane, real_t, 4>())));
+                case I32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int32_t, Plane, real_t, 4>())));
+                case U64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint64_t, Plane, real_t, 4>())));
+                case I64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int64_t, Plane, real_t, 4>())));
+                case F16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<HalfU16, Plane, real_t, 4>())));
+                case F32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<float, Plane, real_t, 4>())));
+                case F64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<double, Plane, real_t, 4>())));
+                default: ADD_ERROR_END_OP_RETURN_VARIANT(ERROR::INVALID_SERIAL_TYPE);
             }
             break;
         }
         case GODOT_TYPE::QUATERNION: {
             switch (serial_type) {
-                case BOOL: return Variant(read_gds_impl<bool, Quaternion, real_t, 4>());
-                case U8: return Variant(read_gds_impl<uint8_t, Quaternion, real_t, 4>());
-                case I8: return Variant(read_gds_impl<int8_t, Quaternion, real_t, 4>());
-                case U16: return Variant(read_gds_impl<uint16_t, Quaternion, real_t, 4>());
-                case I16: return Variant(read_gds_impl<int16_t, Quaternion, real_t, 4>());
-                case U32: return Variant(read_gds_impl<uint32_t, Quaternion, real_t, 4>());
-                case I32: return Variant(read_gds_impl<int32_t, Quaternion, real_t, 4>());
-                case U64: return Variant(read_gds_impl<uint64_t, Quaternion, real_t, 4>());
-                case I64: return Variant(read_gds_impl<int64_t, Quaternion, real_t, 4>());
-                case F16: return Variant(read_gds_impl<HalfU16, Quaternion, real_t, 4>());
-                case F32: return Variant(read_gds_impl<float, Quaternion, real_t, 4>());
-                case F64: return Variant(read_gds_impl<double, Quaternion, real_t, 4>());
-                default: ERR_FAIL_V_MSG(Variant(), "invalid serial type for godot Quaternion");
+                case BOOL: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<bool, Quaternion, real_t, 4>())));
+                case U8: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint8_t, Quaternion, real_t, 4>())));
+                case I8: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int8_t, Quaternion, real_t, 4>())));
+                case U16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint16_t, Quaternion, real_t, 4>())));
+                case I16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int16_t, Quaternion, real_t, 4>())));
+                case U32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint32_t, Quaternion, real_t, 4>())));
+                case I32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int32_t, Quaternion, real_t, 4>())));
+                case U64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint64_t, Quaternion, real_t, 4>())));
+                case I64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int64_t, Quaternion, real_t, 4>())));
+                case F16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<HalfU16, Quaternion, real_t, 4>())));
+                case F32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<float, Quaternion, real_t, 4>())));
+                case F64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<double, Quaternion, real_t, 4>())));
+                default: ADD_ERROR_END_OP_RETURN_VARIANT(ERROR::INVALID_SERIAL_TYPE);
             }
             break;
         }
         case GODOT_TYPE::BASIS: {
             switch (serial_type) {
-                case BOOL: return Variant(read_gds_impl<bool, Basis, real_t, 9>());
-                case U8: return Variant(read_gds_impl<uint8_t, Basis, real_t, 9>());
-                case I8: return Variant(read_gds_impl<int8_t, Basis, real_t, 9>());
-                case U16: return Variant(read_gds_impl<uint16_t, Basis, real_t, 9>());
-                case I16: return Variant(read_gds_impl<int16_t, Basis, real_t, 9>());
-                case U32: return Variant(read_gds_impl<uint32_t, Basis, real_t, 9>());
-                case I32: return Variant(read_gds_impl<int32_t, Basis, real_t, 9>());
-                case U64: return Variant(read_gds_impl<uint64_t, Basis, real_t, 9>());
-                case I64: return Variant(read_gds_impl<int64_t, Basis, real_t, 9>());
-                case F16: return Variant(read_gds_impl<HalfU16, Basis, real_t, 9>());
-                case F32: return Variant(read_gds_impl<float, Basis, real_t, 9>());
-                case F64: return Variant(read_gds_impl<double, Basis, real_t, 9>());
-                default: ERR_FAIL_V_MSG(Variant(), "invalid serial type for godot Basis");
+                case BOOL: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<bool, Basis, real_t, 9>())));
+                case U8: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint8_t, Basis, real_t, 9>())));
+                case I8: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int8_t, Basis, real_t, 9>())));
+                case U16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint16_t, Basis, real_t, 9>())));
+                case I16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int16_t, Basis, real_t, 9>())));
+                case U32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint32_t, Basis, real_t, 9>())));
+                case I32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int32_t, Basis, real_t, 9>())));
+                case U64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint64_t, Basis, real_t, 9>())));
+                case I64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int64_t, Basis, real_t, 9>())));
+                case F16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<HalfU16, Basis, real_t, 9>())));
+                case F32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<float, Basis, real_t, 9>())));
+                case F64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<double, Basis, real_t, 9>())));
+                default: ADD_ERROR_END_OP_RETURN_VARIANT(ERROR::INVALID_SERIAL_TYPE);
             }
             break;
         }
         case GODOT_TYPE::TRANSFORM_2D: {
             switch (serial_type) {
-                case BOOL: return Variant(read_gds_impl<bool, Transform2D, real_t, 6>());
-                case U8: return Variant(read_gds_impl<uint8_t, Transform2D, real_t, 6>());
-                case I8: return Variant(read_gds_impl<int8_t, Transform2D, real_t, 6>());
-                case U16: return Variant(read_gds_impl<uint16_t, Transform2D, real_t, 6>());
-                case I16: return Variant(read_gds_impl<int16_t, Transform2D, real_t, 6>());
-                case U32: return Variant(read_gds_impl<uint32_t, Transform2D, real_t, 6>());
-                case I32: return Variant(read_gds_impl<int32_t, Transform2D, real_t, 6>());
-                case U64: return Variant(read_gds_impl<uint64_t, Transform2D, real_t, 6>());
-                case I64: return Variant(read_gds_impl<int64_t, Transform2D, real_t, 6>());
-                case F16: return Variant(read_gds_impl<HalfU16, Transform2D, real_t, 6>());
-                case F32: return Variant(read_gds_impl<float, Transform2D, real_t, 6>());
-                case F64: return Variant(read_gds_impl<double, Transform2D, real_t, 6>());
-                default: ERR_FAIL_V_MSG(Variant(), "invalid serial type for godot Transform2D");
+                case BOOL: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<bool, Transform2D, real_t, 6>())));
+                case U8: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint8_t, Transform2D, real_t, 6>())));
+                case I8: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int8_t, Transform2D, real_t, 6>())));
+                case U16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint16_t, Transform2D, real_t, 6>())));
+                case I16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int16_t, Transform2D, real_t, 6>())));
+                case U32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint32_t, Transform2D, real_t, 6>())));
+                case I32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int32_t, Transform2D, real_t, 6>())));
+                case U64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint64_t, Transform2D, real_t, 6>())));
+                case I64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int64_t, Transform2D, real_t, 6>())));
+                case F16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<HalfU16, Transform2D, real_t, 6>())));
+                case F32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<float, Transform2D, real_t, 6>())));
+                case F64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<double, Transform2D, real_t, 6>())));
+                default: ADD_ERROR_END_OP_RETURN_VARIANT(ERROR::INVALID_SERIAL_TYPE);
             }
             break;
         }
         case GODOT_TYPE::TRANSFORM_3D: {
             switch (serial_type) {
-                case BOOL: return Variant(read_gds_impl<bool, Transform3D, real_t, 12>());
-                case U8: return Variant(read_gds_impl<uint8_t, Transform3D, real_t, 12>());
-                case I8: return Variant(read_gds_impl<int8_t, Transform3D, real_t, 12>());
-                case U16: return Variant(read_gds_impl<uint16_t, Transform3D, real_t, 12>());
-                case I16: return Variant(read_gds_impl<int16_t, Transform3D, real_t, 12>());
-                case U32: return Variant(read_gds_impl<uint32_t, Transform3D, real_t, 12>());
-                case I32: return Variant(read_gds_impl<int32_t, Transform3D, real_t, 12>());
-                case U64: return Variant(read_gds_impl<uint64_t, Transform3D, real_t, 12>());
-                case I64: return Variant(read_gds_impl<int64_t, Transform3D, real_t, 12>());
-                case F16: return Variant(read_gds_impl<HalfU16, Transform3D, real_t, 12>());
-                case F32: return Variant(read_gds_impl<float, Transform3D, real_t, 12>());
-                case F64: return Variant(read_gds_impl<double, Transform3D, real_t, 12>());
-                default: ERR_FAIL_V_MSG(Variant(), "invalid serial type for godot Transform3D");
+                case BOOL: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<bool, Transform3D, real_t, 12>())));
+                case U8: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint8_t, Transform3D, real_t, 12>())));
+                case I8: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int8_t, Transform3D, real_t, 12>())));
+                case U16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint16_t, Transform3D, real_t, 12>())));
+                case I16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int16_t, Transform3D, real_t, 12>())));
+                case U32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint32_t, Transform3D, real_t, 12>())));
+                case I32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int32_t, Transform3D, real_t, 12>())));
+                case U64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint64_t, Transform3D, real_t, 12>())));
+                case I64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int64_t, Transform3D, real_t, 12>())));
+                case F16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<HalfU16, Transform3D, real_t, 12>())));
+                case F32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<float, Transform3D, real_t, 12>())));
+                case F64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<double, Transform3D, real_t, 12>())));
+                default: ADD_ERROR_END_OP_RETURN_VARIANT(ERROR::INVALID_SERIAL_TYPE);
             }
             break;
         }
         case GODOT_TYPE::PROJECTION: {
             switch (serial_type) {
-                case BOOL: return Variant(read_gds_impl<bool, Projection, real_t, 16>());
-                case U8: return Variant(read_gds_impl<uint8_t, Projection, real_t, 16>());
-                case I8: return Variant(read_gds_impl<int8_t, Projection, real_t, 16>());
-                case U16: return Variant(read_gds_impl<uint16_t, Projection, real_t, 16>());
-                case I16: return Variant(read_gds_impl<int16_t, Projection, real_t, 16>());
-                case U32: return Variant(read_gds_impl<uint32_t, Projection, real_t, 16>());
-                case I32: return Variant(read_gds_impl<int32_t, Projection, real_t, 16>());
-                case U64: return Variant(read_gds_impl<uint64_t, Projection, real_t, 16>());
-                case I64: return Variant(read_gds_impl<int64_t, Projection, real_t, 16>());
-                case F16: return Variant(read_gds_impl<HalfU16, Projection, real_t, 16>());
-                case F32: return Variant(read_gds_impl<float, Projection, real_t, 16>());
-                case F64: return Variant(read_gds_impl<double, Projection, real_t, 16>());
-                default: ERR_FAIL_V_MSG(Variant(), "invalid serial type for godot Projection");
+                case BOOL: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<bool, Projection, real_t, 16>())));
+                case U8: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint8_t, Projection, real_t, 16>())));
+                case I8: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int8_t, Projection, real_t, 16>())));
+                case U16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint16_t, Projection, real_t, 16>())));
+                case I16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int16_t, Projection, real_t, 16>())));
+                case U32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint32_t, Projection, real_t, 16>())));
+                case I32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int32_t, Projection, real_t, 16>())));
+                case U64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<uint64_t, Projection, real_t, 16>())));
+                case I64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<int64_t, Projection, real_t, 16>())));
+                case F16: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<HalfU16, Projection, real_t, 16>())));
+                case F32: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<float, Projection, real_t, 16>())));
+                case F64: DO_THEN_END_OP_RETURN((Variant(read_gds_impl<double, Projection, real_t, 16>())));
+                default: ADD_ERROR_END_OP_RETURN_VARIANT(ERROR::INVALID_SERIAL_TYPE);
             }
             break;
         }
@@ -796,6 +830,7 @@ Variant ReaderWriter::read_gds(GODOT_TYPE type, SERIAL_TYPE serial_type) {
                     LocalVector<char> bytes;
                     bytes.resize(len);
                     read_bytes(bytes.ptr(), len);
+                    end_op();
                     return Variant(String::utf8(bytes.ptr(), static_cast<int>(len)));
                 }
                 case U16: {
@@ -803,6 +838,7 @@ Variant ReaderWriter::read_gds(GODOT_TYPE type, SERIAL_TYPE serial_type) {
                     LocalVector<char16_t> bytes;
                     bytes.resize(len);
                     read_bytes(bytes.ptr(), len * sizeof(char16_t));
+                    end_op();
                     return Variant(String::utf16(bytes.ptr(), static_cast<int>(len)));
                 }
                 case U32: {
@@ -811,9 +847,10 @@ Variant ReaderWriter::read_gds(GODOT_TYPE type, SERIAL_TYPE serial_type) {
                     bytes.resize(len);
                     read_bytes(bytes.ptr(), len * sizeof(char32_t));
                     Span<char32_t> span = Span<char32_t>(bytes.ptr(), len);
+                    end_op();
                     return Variant(String::utf32(span));
                 }
-                default: ERR_FAIL_V_MSG(Variant(), "invalid serial type for godot String");
+                default: ADD_ERROR_END_OP_RETURN_VARIANT(ERROR::INVALID_SERIAL_TYPE);
             }
             break;
         }
@@ -827,6 +864,7 @@ Variant ReaderWriter::read_gds(GODOT_TYPE type, SERIAL_TYPE serial_type) {
             for (uint32_t i = 0; i < len; i += 1) {
                 arr[i] = Variant(read_gds(ANY, DEFAULT));
             }
+            end_op();
             return Variant(arr);
         }
         case GODOT_TYPE::DICTIONARY: {
@@ -840,6 +878,7 @@ Variant ReaderWriter::read_gds(GODOT_TYPE type, SERIAL_TYPE serial_type) {
                 Variant val = read_gds(ANY, DEFAULT);
                 dict.set(key, val);
             }
+            end_op();
             return Variant(dict);
         }
         case GODOT_TYPE::PACKED_BYTE_ARRAY: {
@@ -907,8 +946,9 @@ Variant ReaderWriter::read_gds(GODOT_TYPE type, SERIAL_TYPE serial_type) {
                     }
                     break;
                 }
-                default: ERR_FAIL_V_MSG(Variant(), "invalid serial type for godot PackedByteArray");
+                default: ADD_ERROR_END_OP_RETURN_VARIANT(ERROR::INVALID_SERIAL_TYPE);
             }
+            end_op();
             return Variant(arr);
         }
         case GODOT_TYPE::PACKED_INT32_ARRAY: {
@@ -986,8 +1026,9 @@ Variant ReaderWriter::read_gds(GODOT_TYPE type, SERIAL_TYPE serial_type) {
                     }
                     break;
                 }
-                default: ERR_FAIL_V_MSG(Variant(), "invalid serial type for godot PackedInt32Array");
+                default: ADD_ERROR_END_OP_RETURN_VARIANT(ERROR::INVALID_SERIAL_TYPE);
             }
+            end_op();
             return Variant(arr);
         }
         case GODOT_TYPE::PACKED_INT64_ARRAY: {
@@ -1065,8 +1106,9 @@ Variant ReaderWriter::read_gds(GODOT_TYPE type, SERIAL_TYPE serial_type) {
                     }
                     break;
                 }
-                default: ERR_FAIL_V_MSG(Variant(), "invalid serial type for godot PackedInt64Array");
+                default: ADD_ERROR_END_OP_RETURN_VARIANT(ERROR::INVALID_SERIAL_TYPE);
             }
+            end_op();
             return Variant(arr);
         }
         case GODOT_TYPE::PACKED_FLOAT32_ARRAY: {
@@ -1144,8 +1186,9 @@ Variant ReaderWriter::read_gds(GODOT_TYPE type, SERIAL_TYPE serial_type) {
                     }
                     break;
                 }
-                default: ERR_FAIL_V_MSG(Variant(), "invalid serial type for godot PackedFloat32Array");
+                default: ADD_ERROR_END_OP_RETURN_VARIANT(ERROR::INVALID_SERIAL_TYPE);
             }
+            end_op();
             return Variant(arr);
         }
         case GODOT_TYPE::PACKED_FLOAT64_ARRAY: {
@@ -1223,8 +1266,9 @@ Variant ReaderWriter::read_gds(GODOT_TYPE type, SERIAL_TYPE serial_type) {
                     read_t_array(arr.ptrw(), len);
                     break;
                 }
-                default: ERR_FAIL_V_MSG(Variant(), "invalid serial type for godot PackedFloat64Array");
+                default: ADD_ERROR_END_OP_RETURN_VARIANT(ERROR::INVALID_SERIAL_TYPE);
             }
+            end_op();
             return Variant(arr);
         }
         case GODOT_TYPE::PACKED_VECTOR2_ARRAY: {
@@ -1312,8 +1356,9 @@ Variant ReaderWriter::read_gds(GODOT_TYPE type, SERIAL_TYPE serial_type) {
                     }
                     break;
                 }
-                default: ERR_FAIL_V_MSG(Variant(), "invalid serial type for godot PackedVector2Array");
+                default: ADD_ERROR_END_OP_RETURN_VARIANT(ERROR::INVALID_SERIAL_TYPE);
             }
+            end_op();
             return Variant(arr);
         }
         case GODOT_TYPE::PACKED_VECTOR3_ARRAY: {
@@ -1401,8 +1446,9 @@ Variant ReaderWriter::read_gds(GODOT_TYPE type, SERIAL_TYPE serial_type) {
                     }
                     break;
                 }
-                default: ERR_FAIL_V_MSG(Variant(), "invalid serial type for godot PackedVector3Array");
+                default: ADD_ERROR_END_OP_RETURN_VARIANT(ERROR::INVALID_SERIAL_TYPE);
             }
+            end_op();
             return Variant(arr);
         }
         case GODOT_TYPE::PACKED_VECTOR4_ARRAY: {
@@ -1490,8 +1536,9 @@ Variant ReaderWriter::read_gds(GODOT_TYPE type, SERIAL_TYPE serial_type) {
                     }
                     break;
                 }
-                default: ERR_FAIL_V_MSG(Variant(), "invalid serial type for godot PackedVector4Array");
+                default: ADD_ERROR_END_OP_RETURN_VARIANT(ERROR::INVALID_SERIAL_TYPE);
             }
+            end_op();
             return Variant(arr);
         }
         case GODOT_TYPE::PACKED_COLOR_ARRAY: {
@@ -1569,8 +1616,9 @@ Variant ReaderWriter::read_gds(GODOT_TYPE type, SERIAL_TYPE serial_type) {
                     }
                     break;
                 }
-                default: ERR_FAIL_V_MSG(Variant(), "invalid serial type for godot PackedColorArray");
+                default: ADD_ERROR_END_OP_RETURN_VARIANT(ERROR::INVALID_SERIAL_TYPE);
             }
+            end_op();
             return Variant(arr);
         }
         case GODOT_TYPE::PACKED_STRING_ARRAY: {
@@ -1609,28 +1657,28 @@ Variant ReaderWriter::read_gds(GODOT_TYPE type, SERIAL_TYPE serial_type) {
                     }
                     break;
                 }
-                default: ERR_FAIL_V_MSG(Variant(), "invalid serial type for godot String");
+                default: ADD_ERROR_END_OP_RETURN_VARIANT(ERROR::INVALID_SERIAL_TYPE);
             }
+            end_op();
             return Variant(arr);
         }
-        default: ERR_FAIL_V_MSG(Variant(), "invalid godot type for serialization");
+        default: ADD_ERROR_END_OP_RETURN_VARIANT(ERROR::INVALID_GODOT_TYPE);
     }
 }
 bool ReaderWriter::set_gds(GODOT_TYPE type, Variant val, SERIAL_TYPE serial_type) {
+    start_op();
     int64_t initial_pos = get_write_pos();
-    bool res = write_gds(type, val, serial_type);
+    write_gds(type, val, serial_type);
     seek_write_pos(initial_pos, SEEK::FROM_START);
-    return res;
+    return end_op();
 }
 bool ReaderWriter::write_gds(GODOT_TYPE type, Variant val, SERIAL_TYPE serial_type) {
-    ERR_FAIL_COND_V_MSG(type < _GD_TYPE_MIN || type >= _GD_TYPE_LIMIT, false, "invalid godot type for serialization");
-    ERR_FAIL_COND_V_MSG(serial_type < _SERIAL_TYPE_MIN || serial_type >= _SERIAL_TYPE_LIMIT, false, "invalid serial type");
+    start_op();
+    ADD_ERROR_END_OP_RETURN_IF(type < _GD_TYPE_MIN || type >= _GD_TYPE_LIMIT, ERROR::INVALID_GODOT_TYPE);
+    ADD_ERROR_END_OP_RETURN_IF(serial_type < _SERIAL_TYPE_MIN || serial_type >= _SERIAL_TYPE_LIMIT, ERROR::INVALID_SERIAL_TYPE);
     if (type == ANY) {
         uint32_t type_tag = static_cast<uint32_t>(read_t_val<uint8_t>());
-        if (type_tag < _GD_TYPE_MIN || type_tag >= ANY) {
-            add_error(ERROR::INVALID_TYPE_TAG);
-            ERR_FAIL_V_MSG(false, "invalid type tag in serialized data");
-        }
+        ADD_ERROR_END_OP_RETURN_IF(type_tag < _GD_TYPE_MIN || type_tag >= ANY, ERROR::INVALID_TYPE_TAG_IN_SERIAL_DATA);
         type = (GODOT_TYPE)type_tag;
     }
     if (serial_type == SERIAL_TYPE::DEFAULT) {
@@ -1639,343 +1687,343 @@ bool ReaderWriter::write_gds(GODOT_TYPE type, Variant val, SERIAL_TYPE serial_ty
     switch (type) {
         case GODOT_TYPE::BOOLEAN: {
             switch (serial_type) {
-                case BOOL: return write_gds_impl<bool, bool, bool, 1>((bool)val);
-                case U8: return write_gds_impl<uint8_t, bool, bool, 1>((bool)val);
-                case I8: return write_gds_impl<int8_t, bool, bool, 1>((bool)val);
-                case U16: return write_gds_impl<uint16_t, bool, bool, 1>((bool)val);
-                case I16: return write_gds_impl<int16_t, bool, bool, 1>((bool)val);
-                case U32: return write_gds_impl<uint32_t, bool, bool, 1>((bool)val);
-                case I32: return write_gds_impl<int32_t, bool, bool, 1>((bool)val);
-                case U64: return write_gds_impl<uint64_t, bool, bool, 1>((bool)val);
-                case I64: return write_gds_impl<int64_t, bool, bool, 1>((bool)val);
-                case F16: return write_gds_impl<HalfU16, bool, bool, 1>((bool)val);
-                case F32: return write_gds_impl<float, bool, bool, 1>((bool)val);
-                case F64: return write_gds_impl<double, bool, bool, 1>((bool)val);
-                default: ERR_FAIL_V_MSG(false, "invalid serial type for godot boolean");
+                case BOOL: DO_THEN_END_OP_RETURN((write_gds_impl<bool, bool, bool, 1>((bool)val)));
+                case U8: DO_THEN_END_OP_RETURN((write_gds_impl<uint8_t, bool, bool, 1>((bool)val)));
+                case I8: DO_THEN_END_OP_RETURN((write_gds_impl<int8_t, bool, bool, 1>((bool)val)));
+                case U16: DO_THEN_END_OP_RETURN((write_gds_impl<uint16_t, bool, bool, 1>((bool)val)));
+                case I16: DO_THEN_END_OP_RETURN((write_gds_impl<int16_t, bool, bool, 1>((bool)val)));
+                case U32: DO_THEN_END_OP_RETURN((write_gds_impl<uint32_t, bool, bool, 1>((bool)val)));
+                case I32: DO_THEN_END_OP_RETURN((write_gds_impl<int32_t, bool, bool, 1>((bool)val)));
+                case U64: DO_THEN_END_OP_RETURN((write_gds_impl<uint64_t, bool, bool, 1>((bool)val)));
+                case I64: DO_THEN_END_OP_RETURN((write_gds_impl<int64_t, bool, bool, 1>((bool)val)));
+                case F16: DO_THEN_END_OP_RETURN((write_gds_impl<HalfU16, bool, bool, 1>((bool)val)));
+                case F32: DO_THEN_END_OP_RETURN((write_gds_impl<float, bool, bool, 1>((bool)val)));
+                case F64: DO_THEN_END_OP_RETURN((write_gds_impl<double, bool, bool, 1>((bool)val)));
+                default: ADD_ERROR_END_OP_RETURN(ERROR::INVALID_SERIAL_TYPE);
             }
             break;
         }
         case GODOT_TYPE::INTEGER: {
             switch (serial_type) {
-                case BOOL: return write_gds_impl<bool, int64_t, int64_t, 1>((int64_t)val);
-                case U8: return write_gds_impl<uint8_t, int64_t, int64_t, 1>((int64_t)val);
-                case I8: return write_gds_impl<int8_t, int64_t, int64_t, 1>((int64_t)val);
-                case U16: return write_gds_impl<uint16_t, int64_t, int64_t, 1>((int64_t)val);
-                case I16: return write_gds_impl<int16_t, int64_t, int64_t, 1>((int64_t)val);
-                case U32: return write_gds_impl<uint32_t, int64_t, int64_t, 1>((int64_t)val);
-                case I32: return write_gds_impl<int32_t, int64_t, int64_t, 1>((int64_t)val);
-                case U64: return write_gds_impl<uint64_t, int64_t, int64_t, 1>((int64_t)val);
-                case I64: return write_gds_impl<int64_t, int64_t, int64_t, 1>((int64_t)val);
-                case F16: return write_gds_impl<HalfU16, int64_t, int64_t, 1>((int64_t)val);
-                case F32: return write_gds_impl<float, int64_t, int64_t, 1>((int64_t)val);
-                case F64: return write_gds_impl<double, int64_t, int64_t, 1>((int64_t)val);
-                default: ERR_FAIL_V_MSG(false, "invalid serial type for godot integer");
+                case BOOL: DO_THEN_END_OP_RETURN((write_gds_impl<bool, int64_t, int64_t, 1>((int64_t)val)));
+                case U8: DO_THEN_END_OP_RETURN((write_gds_impl<uint8_t, int64_t, int64_t, 1>((int64_t)val)));
+                case I8: DO_THEN_END_OP_RETURN((write_gds_impl<int8_t, int64_t, int64_t, 1>((int64_t)val)));
+                case U16: DO_THEN_END_OP_RETURN((write_gds_impl<uint16_t, int64_t, int64_t, 1>((int64_t)val)));
+                case I16: DO_THEN_END_OP_RETURN((write_gds_impl<int16_t, int64_t, int64_t, 1>((int64_t)val)));
+                case U32: DO_THEN_END_OP_RETURN((write_gds_impl<uint32_t, int64_t, int64_t, 1>((int64_t)val)));
+                case I32: DO_THEN_END_OP_RETURN((write_gds_impl<int32_t, int64_t, int64_t, 1>((int64_t)val)));
+                case U64: DO_THEN_END_OP_RETURN((write_gds_impl<uint64_t, int64_t, int64_t, 1>((int64_t)val)));
+                case I64: DO_THEN_END_OP_RETURN((write_gds_impl<int64_t, int64_t, int64_t, 1>((int64_t)val)));
+                case F16: DO_THEN_END_OP_RETURN((write_gds_impl<HalfU16, int64_t, int64_t, 1>((int64_t)val)));
+                case F32: DO_THEN_END_OP_RETURN((write_gds_impl<float, int64_t, int64_t, 1>((int64_t)val)));
+                case F64: DO_THEN_END_OP_RETURN((write_gds_impl<double, int64_t, int64_t, 1>((int64_t)val)));
+                default: ADD_ERROR_END_OP_RETURN(ERROR::INVALID_SERIAL_TYPE);
             }
             break;
         }
         case GODOT_TYPE::FLOAT: {
             switch (serial_type) {
-                case BOOL: return write_gds_impl<bool, double, double, 1>((double)val);
-                case U8: return write_gds_impl<uint8_t, double, double, 1>((double)val);
-                case I8: return write_gds_impl<int8_t, double, double, 1>((double)val);
-                case U16: return write_gds_impl<uint16_t, double, double, 1>((double)val);
-                case I16: return write_gds_impl<int16_t, double, double, 1>((double)val);
-                case U32: return write_gds_impl<uint32_t, double, double, 1>((double)val);
-                case I32: return write_gds_impl<int32_t, double, double, 1>((double)val);
-                case U64: return write_gds_impl<uint64_t, double, double, 1>((double)val);
-                case I64: return write_gds_impl<int64_t, double, double, 1>((double)val);
-                case F16: return write_gds_impl<HalfU16, double, double, 1>((double)val);
-                case F32: return write_gds_impl<float, double, double, 1>((double)val);
-                case F64: return write_gds_impl<double, double, double, 1>((double)val);
-                default: ERR_FAIL_V_MSG(false, "invalid serial type for godot float");
+                case BOOL: DO_THEN_END_OP_RETURN((write_gds_impl<bool, double, double, 1>((double)val)));
+                case U8: DO_THEN_END_OP_RETURN((write_gds_impl<uint8_t, double, double, 1>((double)val)));
+                case I8: DO_THEN_END_OP_RETURN((write_gds_impl<int8_t, double, double, 1>((double)val)));
+                case U16: DO_THEN_END_OP_RETURN((write_gds_impl<uint16_t, double, double, 1>((double)val)));
+                case I16: DO_THEN_END_OP_RETURN((write_gds_impl<int16_t, double, double, 1>((double)val)));
+                case U32: DO_THEN_END_OP_RETURN((write_gds_impl<uint32_t, double, double, 1>((double)val)));
+                case I32: DO_THEN_END_OP_RETURN((write_gds_impl<int32_t, double, double, 1>((double)val)));
+                case U64: DO_THEN_END_OP_RETURN((write_gds_impl<uint64_t, double, double, 1>((double)val)));
+                case I64: DO_THEN_END_OP_RETURN((write_gds_impl<int64_t, double, double, 1>((double)val)));
+                case F16: DO_THEN_END_OP_RETURN((write_gds_impl<HalfU16, double, double, 1>((double)val)));
+                case F32: DO_THEN_END_OP_RETURN((write_gds_impl<float, double, double, 1>((double)val)));
+                case F64: DO_THEN_END_OP_RETURN((write_gds_impl<double, double, double, 1>((double)val)));
+                default: ADD_ERROR_END_OP_RETURN(ERROR::INVALID_SERIAL_TYPE);
             }
             break;
         }
         case GODOT_TYPE::VEC_2: {
             switch (serial_type) {
-                case BOOL: return write_gds_impl<bool, Vector2, real_t, 2>((Vector2)val);
-                case U8: return write_gds_impl<uint8_t, Vector2, real_t, 2>((Vector2)val);
-                case I8: return write_gds_impl<int8_t, Vector2, real_t, 2>((Vector2)val);
-                case U16: return write_gds_impl<uint16_t, Vector2, real_t, 2>((Vector2)val);
-                case I16: return write_gds_impl<int16_t, Vector2, real_t, 2>((Vector2)val);
-                case U32: return write_gds_impl<uint32_t, Vector2, real_t, 2>((Vector2)val);
-                case I32: return write_gds_impl<int32_t, Vector2, real_t, 2>((Vector2)val);
-                case U64: return write_gds_impl<uint64_t, Vector2, real_t, 2>((Vector2)val);
-                case I64: return write_gds_impl<int64_t, Vector2, real_t, 2>((Vector2)val);
-                case F16: return write_gds_impl<HalfU16, Vector2, real_t, 2>((Vector2)val);
-                case F32: return write_gds_impl<float, Vector2, real_t, 2>((Vector2)val);
-                case F64: return write_gds_impl<double, Vector2, real_t, 2>((Vector2)val);
-                default: ERR_FAIL_V_MSG(false, "invalid serial type for godot Vector2");
+                case BOOL: DO_THEN_END_OP_RETURN((write_gds_impl<bool, Vector2, real_t, 2>((Vector2)val)));
+                case U8: DO_THEN_END_OP_RETURN((write_gds_impl<uint8_t, Vector2, real_t, 2>((Vector2)val)));
+                case I8: DO_THEN_END_OP_RETURN((write_gds_impl<int8_t, Vector2, real_t, 2>((Vector2)val)));
+                case U16: DO_THEN_END_OP_RETURN((write_gds_impl<uint16_t, Vector2, real_t, 2>((Vector2)val)));
+                case I16: DO_THEN_END_OP_RETURN((write_gds_impl<int16_t, Vector2, real_t, 2>((Vector2)val)));
+                case U32: DO_THEN_END_OP_RETURN((write_gds_impl<uint32_t, Vector2, real_t, 2>((Vector2)val)));
+                case I32: DO_THEN_END_OP_RETURN((write_gds_impl<int32_t, Vector2, real_t, 2>((Vector2)val)));
+                case U64: DO_THEN_END_OP_RETURN((write_gds_impl<uint64_t, Vector2, real_t, 2>((Vector2)val)));
+                case I64: DO_THEN_END_OP_RETURN((write_gds_impl<int64_t, Vector2, real_t, 2>((Vector2)val)));
+                case F16: DO_THEN_END_OP_RETURN((write_gds_impl<HalfU16, Vector2, real_t, 2>((Vector2)val)));
+                case F32: DO_THEN_END_OP_RETURN((write_gds_impl<float, Vector2, real_t, 2>((Vector2)val)));
+                case F64: DO_THEN_END_OP_RETURN((write_gds_impl<double, Vector2, real_t, 2>((Vector2)val)));
+                default: ADD_ERROR_END_OP_RETURN(ERROR::INVALID_SERIAL_TYPE);
             }
             break;
         }
         case GODOT_TYPE::VEC_2I: {
             switch (serial_type) {
-                case BOOL: return write_gds_impl<bool, Vector2i, int32_t, 2>((Vector2i)val);
-                case U8: return write_gds_impl<uint8_t, Vector2i, int32_t, 2>((Vector2i)val);
-                case I8: return write_gds_impl<int8_t, Vector2i, int32_t, 2>((Vector2i)val);
-                case U16: return write_gds_impl<uint16_t, Vector2i, int32_t, 2>((Vector2i)val);
-                case I16: return write_gds_impl<int16_t, Vector2i, int32_t, 2>((Vector2i)val);
-                case U32: return write_gds_impl<uint32_t, Vector2i, int32_t, 2>((Vector2i)val);
-                case I32: return write_gds_impl<int32_t, Vector2i, int32_t, 2>((Vector2i)val);
-                case U64: return write_gds_impl<uint64_t, Vector2i, int32_t, 2>((Vector2i)val);
-                case I64: return write_gds_impl<int64_t, Vector2i, int32_t, 2>((Vector2i)val);
-                case F16: return write_gds_impl<HalfU16, Vector2i, int32_t, 2>((Vector2i)val);
-                case F32: return write_gds_impl<float, Vector2i, int32_t, 2>((Vector2i)val);
-                case F64: return write_gds_impl<double, Vector2i, int32_t, 2>((Vector2i)val);
-                default: ERR_FAIL_V_MSG(false, "invalid serial type for godot Vector2i");
+                case BOOL: DO_THEN_END_OP_RETURN((write_gds_impl<bool, Vector2i, int32_t, 2>((Vector2i)val)));
+                case U8: DO_THEN_END_OP_RETURN((write_gds_impl<uint8_t, Vector2i, int32_t, 2>((Vector2i)val)));
+                case I8: DO_THEN_END_OP_RETURN((write_gds_impl<int8_t, Vector2i, int32_t, 2>((Vector2i)val)));
+                case U16: DO_THEN_END_OP_RETURN((write_gds_impl<uint16_t, Vector2i, int32_t, 2>((Vector2i)val)));
+                case I16: DO_THEN_END_OP_RETURN((write_gds_impl<int16_t, Vector2i, int32_t, 2>((Vector2i)val)));
+                case U32: DO_THEN_END_OP_RETURN((write_gds_impl<uint32_t, Vector2i, int32_t, 2>((Vector2i)val)));
+                case I32: DO_THEN_END_OP_RETURN((write_gds_impl<int32_t, Vector2i, int32_t, 2>((Vector2i)val)));
+                case U64: DO_THEN_END_OP_RETURN((write_gds_impl<uint64_t, Vector2i, int32_t, 2>((Vector2i)val)));
+                case I64: DO_THEN_END_OP_RETURN((write_gds_impl<int64_t, Vector2i, int32_t, 2>((Vector2i)val)));
+                case F16: DO_THEN_END_OP_RETURN((write_gds_impl<HalfU16, Vector2i, int32_t, 2>((Vector2i)val)));
+                case F32: DO_THEN_END_OP_RETURN((write_gds_impl<float, Vector2i, int32_t, 2>((Vector2i)val)));
+                case F64: DO_THEN_END_OP_RETURN((write_gds_impl<double, Vector2i, int32_t, 2>((Vector2i)val)));
+                default: ADD_ERROR_END_OP_RETURN(ERROR::INVALID_SERIAL_TYPE);
             }
             break;
         }
         case GODOT_TYPE::VEC_3: {
             switch (serial_type) {
-                case BOOL: return write_gds_impl<bool, Vector3, real_t, 3>((Vector3)val);
-                case U8: return write_gds_impl<uint8_t, Vector3, real_t, 3>((Vector3)val);
-                case I8: return write_gds_impl<int8_t, Vector3, real_t, 3>((Vector3)val);
-                case U16: return write_gds_impl<uint16_t, Vector3, real_t, 3>((Vector3)val);
-                case I16: return write_gds_impl<int16_t, Vector3, real_t, 3>((Vector3)val);
-                case U32: return write_gds_impl<uint32_t, Vector3, real_t, 3>((Vector3)val);
-                case I32: return write_gds_impl<int32_t, Vector3, real_t, 3>((Vector3)val);
-                case U64: return write_gds_impl<uint64_t, Vector3, real_t, 3>((Vector3)val);
-                case I64: return write_gds_impl<int64_t, Vector3, real_t, 3>((Vector3)val);
-                case F16: return write_gds_impl<HalfU16, Vector3, real_t, 3>((Vector3)val);
-                case F32: return write_gds_impl<float, Vector3, real_t, 3>((Vector3)val);
-                case F64: return write_gds_impl<double, Vector3, real_t, 3>((Vector3)val);
-                default: ERR_FAIL_V_MSG(false, "invalid serial type for godot Vector3");
+                case BOOL: DO_THEN_END_OP_RETURN((write_gds_impl<bool, Vector3, real_t, 3>((Vector3)val)));
+                case U8: DO_THEN_END_OP_RETURN((write_gds_impl<uint8_t, Vector3, real_t, 3>((Vector3)val)));
+                case I8: DO_THEN_END_OP_RETURN((write_gds_impl<int8_t, Vector3, real_t, 3>((Vector3)val)));
+                case U16: DO_THEN_END_OP_RETURN((write_gds_impl<uint16_t, Vector3, real_t, 3>((Vector3)val)));
+                case I16: DO_THEN_END_OP_RETURN((write_gds_impl<int16_t, Vector3, real_t, 3>((Vector3)val)));
+                case U32: DO_THEN_END_OP_RETURN((write_gds_impl<uint32_t, Vector3, real_t, 3>((Vector3)val)));
+                case I32: DO_THEN_END_OP_RETURN((write_gds_impl<int32_t, Vector3, real_t, 3>((Vector3)val)));
+                case U64: DO_THEN_END_OP_RETURN((write_gds_impl<uint64_t, Vector3, real_t, 3>((Vector3)val)));
+                case I64: DO_THEN_END_OP_RETURN((write_gds_impl<int64_t, Vector3, real_t, 3>((Vector3)val)));
+                case F16: DO_THEN_END_OP_RETURN((write_gds_impl<HalfU16, Vector3, real_t, 3>((Vector3)val)));
+                case F32: DO_THEN_END_OP_RETURN((write_gds_impl<float, Vector3, real_t, 3>((Vector3)val)));
+                case F64: DO_THEN_END_OP_RETURN((write_gds_impl<double, Vector3, real_t, 3>((Vector3)val)));
+                default: ADD_ERROR_END_OP_RETURN(ERROR::INVALID_SERIAL_TYPE);
             }
             break;
         }
         case GODOT_TYPE::VEC_3I: {
             switch (serial_type) {
-                case BOOL: return write_gds_impl<bool, Vector3i, int32_t, 3>((Vector3i)val);
-                case U8: return write_gds_impl<uint8_t, Vector3i, int32_t, 3>((Vector3i)val);
-                case I8: return write_gds_impl<int8_t, Vector3i, int32_t, 3>((Vector3i)val);
-                case U16: return write_gds_impl<uint16_t, Vector3i, int32_t, 3>((Vector3i)val);
-                case I16: return write_gds_impl<int16_t, Vector3i, int32_t, 3>((Vector3i)val);
-                case U32: return write_gds_impl<uint32_t, Vector3i, int32_t, 3>((Vector3i)val);
-                case I32: return write_gds_impl<int32_t, Vector3i, int32_t, 3>((Vector3i)val);
-                case U64: return write_gds_impl<uint64_t, Vector3i, int32_t, 3>((Vector3i)val);
-                case I64: return write_gds_impl<int64_t, Vector3i, int32_t, 3>((Vector3i)val);
-                case F16: return write_gds_impl<HalfU16, Vector3i, int32_t, 3>((Vector3i)val);
-                case F32: return write_gds_impl<float, Vector3i, int32_t, 3>((Vector3i)val);
-                case F64: return write_gds_impl<double, Vector3i, int32_t, 3>((Vector3i)val);
-                default: ERR_FAIL_V_MSG(false, "invalid serial type for godot Vector3i");
+                case BOOL: DO_THEN_END_OP_RETURN((write_gds_impl<bool, Vector3i, int32_t, 3>((Vector3i)val)));
+                case U8: DO_THEN_END_OP_RETURN((write_gds_impl<uint8_t, Vector3i, int32_t, 3>((Vector3i)val)));
+                case I8: DO_THEN_END_OP_RETURN((write_gds_impl<int8_t, Vector3i, int32_t, 3>((Vector3i)val)));
+                case U16: DO_THEN_END_OP_RETURN((write_gds_impl<uint16_t, Vector3i, int32_t, 3>((Vector3i)val)));
+                case I16: DO_THEN_END_OP_RETURN((write_gds_impl<int16_t, Vector3i, int32_t, 3>((Vector3i)val)));
+                case U32: DO_THEN_END_OP_RETURN((write_gds_impl<uint32_t, Vector3i, int32_t, 3>((Vector3i)val)));
+                case I32: DO_THEN_END_OP_RETURN((write_gds_impl<int32_t, Vector3i, int32_t, 3>((Vector3i)val)));
+                case U64: DO_THEN_END_OP_RETURN((write_gds_impl<uint64_t, Vector3i, int32_t, 3>((Vector3i)val)));
+                case I64: DO_THEN_END_OP_RETURN((write_gds_impl<int64_t, Vector3i, int32_t, 3>((Vector3i)val)));
+                case F16: DO_THEN_END_OP_RETURN((write_gds_impl<HalfU16, Vector3i, int32_t, 3>((Vector3i)val)));
+                case F32: DO_THEN_END_OP_RETURN((write_gds_impl<float, Vector3i, int32_t, 3>((Vector3i)val)));
+                case F64: DO_THEN_END_OP_RETURN((write_gds_impl<double, Vector3i, int32_t, 3>((Vector3i)val)));
+                default: ADD_ERROR_END_OP_RETURN(ERROR::INVALID_SERIAL_TYPE);
             }
             break;
         }
         case GODOT_TYPE::VEC_4: {
             switch (serial_type) {
-                case BOOL: return write_gds_impl<bool, Vector4, real_t, 4>((Vector4)val);
-                case U8: return write_gds_impl<uint8_t, Vector4, real_t, 4>((Vector4)val);
-                case I8: return write_gds_impl<int8_t, Vector4, real_t, 4>((Vector4)val);
-                case U16: return write_gds_impl<uint16_t, Vector4, real_t, 4>((Vector4)val);
-                case I16: return write_gds_impl<int16_t, Vector4, real_t, 4>((Vector4)val);
-                case U32: return write_gds_impl<uint32_t, Vector4, real_t, 4>((Vector4)val);
-                case I32: return write_gds_impl<int32_t, Vector4, real_t, 4>((Vector4)val);
-                case U64: return write_gds_impl<uint64_t, Vector4, real_t, 4>((Vector4)val);
-                case I64: return write_gds_impl<int64_t, Vector4, real_t, 4>((Vector4)val);
-                case F16: return write_gds_impl<HalfU16, Vector4, real_t, 4>((Vector4)val);
-                case F32: return write_gds_impl<float, Vector4, real_t, 4>((Vector4)val);
-                case F64: return write_gds_impl<double, Vector4, real_t, 4>((Vector4)val);
-                default: ERR_FAIL_V_MSG(false, "invalid serial type for godot Vector4");
+                case BOOL: DO_THEN_END_OP_RETURN((write_gds_impl<bool, Vector4, real_t, 4>((Vector4)val)));
+                case U8: DO_THEN_END_OP_RETURN((write_gds_impl<uint8_t, Vector4, real_t, 4>((Vector4)val)));
+                case I8: DO_THEN_END_OP_RETURN((write_gds_impl<int8_t, Vector4, real_t, 4>((Vector4)val)));
+                case U16: DO_THEN_END_OP_RETURN((write_gds_impl<uint16_t, Vector4, real_t, 4>((Vector4)val)));
+                case I16: DO_THEN_END_OP_RETURN((write_gds_impl<int16_t, Vector4, real_t, 4>((Vector4)val)));
+                case U32: DO_THEN_END_OP_RETURN((write_gds_impl<uint32_t, Vector4, real_t, 4>((Vector4)val)));
+                case I32: DO_THEN_END_OP_RETURN((write_gds_impl<int32_t, Vector4, real_t, 4>((Vector4)val)));
+                case U64: DO_THEN_END_OP_RETURN((write_gds_impl<uint64_t, Vector4, real_t, 4>((Vector4)val)));
+                case I64: DO_THEN_END_OP_RETURN((write_gds_impl<int64_t, Vector4, real_t, 4>((Vector4)val)));
+                case F16: DO_THEN_END_OP_RETURN((write_gds_impl<HalfU16, Vector4, real_t, 4>((Vector4)val)));
+                case F32: DO_THEN_END_OP_RETURN((write_gds_impl<float, Vector4, real_t, 4>((Vector4)val)));
+                case F64: DO_THEN_END_OP_RETURN((write_gds_impl<double, Vector4, real_t, 4>((Vector4)val)));
+                default: ADD_ERROR_END_OP_RETURN(ERROR::INVALID_SERIAL_TYPE);
             }
             break;
         }
         case GODOT_TYPE::VEC_4I: {
             switch (serial_type) {
-                case BOOL: return write_gds_impl<bool, Vector4i, int32_t, 4>((Vector4i)val);
-                case U8: return write_gds_impl<uint8_t, Vector4i, int32_t, 4>((Vector4i)val);
-                case I8: return write_gds_impl<int8_t, Vector4i, int32_t, 4>((Vector4i)val);
-                case U16: return write_gds_impl<uint16_t, Vector4i, int32_t, 4>((Vector4i)val);
-                case I16: return write_gds_impl<int16_t, Vector4i, int32_t, 4>((Vector4i)val);
-                case U32: return write_gds_impl<uint32_t, Vector4i, int32_t, 4>((Vector4i)val);
-                case I32: return write_gds_impl<int32_t, Vector4i, int32_t, 4>((Vector4i)val);
-                case U64: return write_gds_impl<uint64_t, Vector4i, int32_t, 4>((Vector4i)val);
-                case I64: return write_gds_impl<int64_t, Vector4i, int32_t, 4>((Vector4i)val);
-                case F16: return write_gds_impl<HalfU16, Vector4i, int32_t, 4>((Vector4i)val);
-                case F32: return write_gds_impl<float, Vector4i, int32_t, 4>((Vector4i)val);
-                case F64: return write_gds_impl<double, Vector4i, int32_t, 4>((Vector4i)val);
-                default: ERR_FAIL_V_MSG(false, "invalid serial type for godot Vector4i");
+                case BOOL: DO_THEN_END_OP_RETURN((write_gds_impl<bool, Vector4i, int32_t, 4>((Vector4i)val)));
+                case U8: DO_THEN_END_OP_RETURN((write_gds_impl<uint8_t, Vector4i, int32_t, 4>((Vector4i)val)));
+                case I8: DO_THEN_END_OP_RETURN((write_gds_impl<int8_t, Vector4i, int32_t, 4>((Vector4i)val)));
+                case U16: DO_THEN_END_OP_RETURN((write_gds_impl<uint16_t, Vector4i, int32_t, 4>((Vector4i)val)));
+                case I16: DO_THEN_END_OP_RETURN((write_gds_impl<int16_t, Vector4i, int32_t, 4>((Vector4i)val)));
+                case U32: DO_THEN_END_OP_RETURN((write_gds_impl<uint32_t, Vector4i, int32_t, 4>((Vector4i)val)));
+                case I32: DO_THEN_END_OP_RETURN((write_gds_impl<int32_t, Vector4i, int32_t, 4>((Vector4i)val)));
+                case U64: DO_THEN_END_OP_RETURN((write_gds_impl<uint64_t, Vector4i, int32_t, 4>((Vector4i)val)));
+                case I64: DO_THEN_END_OP_RETURN((write_gds_impl<int64_t, Vector4i, int32_t, 4>((Vector4i)val)));
+                case F16: DO_THEN_END_OP_RETURN((write_gds_impl<HalfU16, Vector4i, int32_t, 4>((Vector4i)val)));
+                case F32: DO_THEN_END_OP_RETURN((write_gds_impl<float, Vector4i, int32_t, 4>((Vector4i)val)));
+                case F64: DO_THEN_END_OP_RETURN((write_gds_impl<double, Vector4i, int32_t, 4>((Vector4i)val)));
+                default: ADD_ERROR_END_OP_RETURN(ERROR::INVALID_SERIAL_TYPE);
             }
             break;
         }
         case GODOT_TYPE::COLOR: {
             switch (serial_type) {
-                case BOOL: return write_gds_impl<bool, Color, float, 4>((Color)val);
-                case U8: return write_gds_impl<uint8_t, Color, float, 4>((Color)val);
-                case I8: return write_gds_impl<int8_t, Color, float, 4>((Color)val);
-                case U16: return write_gds_impl<uint16_t, Color, float, 4>((Color)val);
-                case I16: return write_gds_impl<int16_t, Color, float, 4>((Color)val);
-                case U32: return write_gds_impl<uint32_t, Color, float, 4>((Color)val);
-                case I32: return write_gds_impl<int32_t, Color, float, 4>((Color)val);
-                case U64: return write_gds_impl<uint64_t, Color, float, 4>((Color)val);
-                case I64: return write_gds_impl<int64_t, Color, float, 4>((Color)val);
-                case F16: return write_gds_impl<HalfU16, Color, float, 4>((Color)val);
-                case F32: return write_gds_impl<float, Color, float, 4>((Color)val);
-                case F64: return write_gds_impl<double, Color, float, 4>((Color)val);
-                default: ERR_FAIL_V_MSG(false, "invalid serial type for godot Color");
+                case BOOL: DO_THEN_END_OP_RETURN((write_gds_impl<bool, Color, float, 4>((Color)val)));
+                case U8: DO_THEN_END_OP_RETURN((write_gds_impl<uint8_t, Color, float, 4>((Color)val)));
+                case I8: DO_THEN_END_OP_RETURN((write_gds_impl<int8_t, Color, float, 4>((Color)val)));
+                case U16: DO_THEN_END_OP_RETURN((write_gds_impl<uint16_t, Color, float, 4>((Color)val)));
+                case I16: DO_THEN_END_OP_RETURN((write_gds_impl<int16_t, Color, float, 4>((Color)val)));
+                case U32: DO_THEN_END_OP_RETURN((write_gds_impl<uint32_t, Color, float, 4>((Color)val)));
+                case I32: DO_THEN_END_OP_RETURN((write_gds_impl<int32_t, Color, float, 4>((Color)val)));
+                case U64: DO_THEN_END_OP_RETURN((write_gds_impl<uint64_t, Color, float, 4>((Color)val)));
+                case I64: DO_THEN_END_OP_RETURN((write_gds_impl<int64_t, Color, float, 4>((Color)val)));
+                case F16: DO_THEN_END_OP_RETURN((write_gds_impl<HalfU16, Color, float, 4>((Color)val)));
+                case F32: DO_THEN_END_OP_RETURN((write_gds_impl<float, Color, float, 4>((Color)val)));
+                case F64: DO_THEN_END_OP_RETURN((write_gds_impl<double, Color, float, 4>((Color)val)));
+                default: ADD_ERROR_END_OP_RETURN(ERROR::INVALID_SERIAL_TYPE);
             }
             break;
         }
         case GODOT_TYPE::RECT_2: {
             switch (serial_type) {
-                case BOOL: return write_gds_impl<bool, Rect2, real_t, 4>((Rect2)val);
-                case U8: return write_gds_impl<uint8_t, Rect2, real_t, 4>((Rect2)val);
-                case I8: return write_gds_impl<int8_t, Rect2, real_t, 4>((Rect2)val);
-                case U16: return write_gds_impl<uint16_t, Rect2, real_t, 4>((Rect2)val);
-                case I16: return write_gds_impl<int16_t, Rect2, real_t, 4>((Rect2)val);
-                case U32: return write_gds_impl<uint32_t, Rect2, real_t, 4>((Rect2)val);
-                case I32: return write_gds_impl<int32_t, Rect2, real_t, 4>((Rect2)val);
-                case U64: return write_gds_impl<uint64_t, Rect2, real_t, 4>((Rect2)val);
-                case I64: return write_gds_impl<int64_t, Rect2, real_t, 4>((Rect2)val);
-                case F16: return write_gds_impl<HalfU16, Rect2, real_t, 4>((Rect2)val);
-                case F32: return write_gds_impl<float, Rect2, real_t, 4>((Rect2)val);
-                case F64: return write_gds_impl<double, Rect2, real_t, 4>((Rect2)val);
-                default: ERR_FAIL_V_MSG(false, "invalid serial type for godot Rect2");
+                case BOOL: DO_THEN_END_OP_RETURN((write_gds_impl<bool, Rect2, real_t, 4>((Rect2)val)));
+                case U8: DO_THEN_END_OP_RETURN((write_gds_impl<uint8_t, Rect2, real_t, 4>((Rect2)val)));
+                case I8: DO_THEN_END_OP_RETURN((write_gds_impl<int8_t, Rect2, real_t, 4>((Rect2)val)));
+                case U16: DO_THEN_END_OP_RETURN((write_gds_impl<uint16_t, Rect2, real_t, 4>((Rect2)val)));
+                case I16: DO_THEN_END_OP_RETURN((write_gds_impl<int16_t, Rect2, real_t, 4>((Rect2)val)));
+                case U32: DO_THEN_END_OP_RETURN((write_gds_impl<uint32_t, Rect2, real_t, 4>((Rect2)val)));
+                case I32: DO_THEN_END_OP_RETURN((write_gds_impl<int32_t, Rect2, real_t, 4>((Rect2)val)));
+                case U64: DO_THEN_END_OP_RETURN((write_gds_impl<uint64_t, Rect2, real_t, 4>((Rect2)val)));
+                case I64: DO_THEN_END_OP_RETURN((write_gds_impl<int64_t, Rect2, real_t, 4>((Rect2)val)));
+                case F16: DO_THEN_END_OP_RETURN((write_gds_impl<HalfU16, Rect2, real_t, 4>((Rect2)val)));
+                case F32: DO_THEN_END_OP_RETURN((write_gds_impl<float, Rect2, real_t, 4>((Rect2)val)));
+                case F64: DO_THEN_END_OP_RETURN((write_gds_impl<double, Rect2, real_t, 4>((Rect2)val)));
+                default: ADD_ERROR_END_OP_RETURN(ERROR::INVALID_SERIAL_TYPE);
             }
             break;
         }
         case GODOT_TYPE::RECT_2I: {
             switch (serial_type) {
-                case BOOL: return write_gds_impl<bool, Rect2i, int32_t, 4>((Rect2i)val);
-                case U8: return write_gds_impl<uint8_t, Rect2i, int32_t, 4>((Rect2i)val);
-                case I8: return write_gds_impl<int8_t, Rect2i, int32_t, 4>((Rect2i)val);
-                case U16: return write_gds_impl<uint16_t, Rect2i, int32_t, 4>((Rect2i)val);
-                case I16: return write_gds_impl<int16_t, Rect2i, int32_t, 4>((Rect2i)val);
-                case U32: return write_gds_impl<uint32_t, Rect2i, int32_t, 4>((Rect2i)val);
-                case I32: return write_gds_impl<int32_t, Rect2i, int32_t, 4>((Rect2i)val);
-                case U64: return write_gds_impl<uint64_t, Rect2i, int32_t, 4>((Rect2i)val);
-                case I64: return write_gds_impl<int64_t, Rect2i, int32_t, 4>((Rect2i)val);
-                case F16: return write_gds_impl<HalfU16, Rect2i, int32_t, 4>((Rect2i)val);
-                case F32: return write_gds_impl<float, Rect2i, int32_t, 4>((Rect2i)val);
-                case F64: return write_gds_impl<double, Rect2i, int32_t, 4>((Rect2i)val);
-                default: ERR_FAIL_V_MSG(false, "invalid serial type for godot Rect2i");
+                case BOOL: DO_THEN_END_OP_RETURN((write_gds_impl<bool, Rect2i, int32_t, 4>((Rect2i)val)));
+                case U8: DO_THEN_END_OP_RETURN((write_gds_impl<uint8_t, Rect2i, int32_t, 4>((Rect2i)val)));
+                case I8: DO_THEN_END_OP_RETURN((write_gds_impl<int8_t, Rect2i, int32_t, 4>((Rect2i)val)));
+                case U16: DO_THEN_END_OP_RETURN((write_gds_impl<uint16_t, Rect2i, int32_t, 4>((Rect2i)val)));
+                case I16: DO_THEN_END_OP_RETURN((write_gds_impl<int16_t, Rect2i, int32_t, 4>((Rect2i)val)));
+                case U32: DO_THEN_END_OP_RETURN((write_gds_impl<uint32_t, Rect2i, int32_t, 4>((Rect2i)val)));
+                case I32: DO_THEN_END_OP_RETURN((write_gds_impl<int32_t, Rect2i, int32_t, 4>((Rect2i)val)));
+                case U64: DO_THEN_END_OP_RETURN((write_gds_impl<uint64_t, Rect2i, int32_t, 4>((Rect2i)val)));
+                case I64: DO_THEN_END_OP_RETURN((write_gds_impl<int64_t, Rect2i, int32_t, 4>((Rect2i)val)));
+                case F16: DO_THEN_END_OP_RETURN((write_gds_impl<HalfU16, Rect2i, int32_t, 4>((Rect2i)val)));
+                case F32: DO_THEN_END_OP_RETURN((write_gds_impl<float, Rect2i, int32_t, 4>((Rect2i)val)));
+                case F64: DO_THEN_END_OP_RETURN((write_gds_impl<double, Rect2i, int32_t, 4>((Rect2i)val)));
+                default: ADD_ERROR_END_OP_RETURN(ERROR::INVALID_SERIAL_TYPE);
             }
             break;
         }
         case GODOT_TYPE::AABB: {
             switch (serial_type) {
-                case BOOL: return write_gds_impl<bool, ::AABB, real_t, 6>((::AABB)val);
-                case U8: return write_gds_impl<uint8_t, ::AABB, real_t, 6>((::AABB)val);
-                case I8: return write_gds_impl<int8_t, ::AABB, real_t, 6>((::AABB)val);
-                case U16: return write_gds_impl<uint16_t, ::AABB, real_t, 6>((::AABB)val);
-                case I16: return write_gds_impl<int16_t, ::AABB, real_t, 6>((::AABB)val);
-                case U32: return write_gds_impl<uint32_t, ::AABB, real_t, 6>((::AABB)val);
-                case I32: return write_gds_impl<int32_t, ::AABB, real_t, 6>((::AABB)val);
-                case U64: return write_gds_impl<uint64_t, ::AABB, real_t, 6>((::AABB)val);
-                case I64: return write_gds_impl<int64_t, ::AABB, real_t, 6>((::AABB)val);
-                case F16: return write_gds_impl<HalfU16, ::AABB, real_t, 6>((::AABB)val);
-                case F32: return write_gds_impl<float, ::AABB, real_t, 6>((::AABB)val);
-                case F64: return write_gds_impl<double, ::AABB, real_t, 6>((::AABB)val);
-                default: ERR_FAIL_V_MSG(false, "invalid serial type for godot AABB");
+                case BOOL: DO_THEN_END_OP_RETURN((write_gds_impl<bool, ::AABB, real_t, 6>((::AABB)val)));
+                case U8: DO_THEN_END_OP_RETURN((write_gds_impl<uint8_t, ::AABB, real_t, 6>((::AABB)val)));
+                case I8: DO_THEN_END_OP_RETURN((write_gds_impl<int8_t, ::AABB, real_t, 6>((::AABB)val)));
+                case U16: DO_THEN_END_OP_RETURN((write_gds_impl<uint16_t, ::AABB, real_t, 6>((::AABB)val)));
+                case I16: DO_THEN_END_OP_RETURN((write_gds_impl<int16_t, ::AABB, real_t, 6>((::AABB)val)));
+                case U32: DO_THEN_END_OP_RETURN((write_gds_impl<uint32_t, ::AABB, real_t, 6>((::AABB)val)));
+                case I32: DO_THEN_END_OP_RETURN((write_gds_impl<int32_t, ::AABB, real_t, 6>((::AABB)val)));
+                case U64: DO_THEN_END_OP_RETURN((write_gds_impl<uint64_t, ::AABB, real_t, 6>((::AABB)val)));
+                case I64: DO_THEN_END_OP_RETURN((write_gds_impl<int64_t, ::AABB, real_t, 6>((::AABB)val)));
+                case F16: DO_THEN_END_OP_RETURN((write_gds_impl<HalfU16, ::AABB, real_t, 6>((::AABB)val)));
+                case F32: DO_THEN_END_OP_RETURN((write_gds_impl<float, ::AABB, real_t, 6>((::AABB)val)));
+                case F64: DO_THEN_END_OP_RETURN((write_gds_impl<double, ::AABB, real_t, 6>((::AABB)val)));
+                default: ADD_ERROR_END_OP_RETURN(ERROR::INVALID_SERIAL_TYPE);
             }
             break;
         }
         case GODOT_TYPE::PLANE: {
             switch (serial_type) {
-                case BOOL: return write_gds_impl<bool, Plane, real_t, 4>((Plane)val);
-                case U8: return write_gds_impl<uint8_t, Plane, real_t, 4>((Plane)val);
-                case I8: return write_gds_impl<int8_t, Plane, real_t, 4>((Plane)val);
-                case U16: return write_gds_impl<uint16_t, Plane, real_t, 4>((Plane)val);
-                case I16: return write_gds_impl<int16_t, Plane, real_t, 4>((Plane)val);
-                case U32: return write_gds_impl<uint32_t, Plane, real_t, 4>((Plane)val);
-                case I32: return write_gds_impl<int32_t, Plane, real_t, 4>((Plane)val);
-                case U64: return write_gds_impl<uint64_t, Plane, real_t, 4>((Plane)val);
-                case I64: return write_gds_impl<int64_t, Plane, real_t, 4>((Plane)val);
-                case F16: return write_gds_impl<HalfU16, Plane, real_t, 4>((Plane)val);
-                case F32: return write_gds_impl<float, Plane, real_t, 4>((Plane)val);
-                case F64: return write_gds_impl<double, Plane, real_t, 4>((Plane)val);
-                default: ERR_FAIL_V_MSG(false, "invalid serial type for godot Plane");
+                case BOOL: DO_THEN_END_OP_RETURN((write_gds_impl<bool, Plane, real_t, 4>((Plane)val)));
+                case U8: DO_THEN_END_OP_RETURN((write_gds_impl<uint8_t, Plane, real_t, 4>((Plane)val)));
+                case I8: DO_THEN_END_OP_RETURN((write_gds_impl<int8_t, Plane, real_t, 4>((Plane)val)));
+                case U16: DO_THEN_END_OP_RETURN((write_gds_impl<uint16_t, Plane, real_t, 4>((Plane)val)));
+                case I16: DO_THEN_END_OP_RETURN((write_gds_impl<int16_t, Plane, real_t, 4>((Plane)val)));
+                case U32: DO_THEN_END_OP_RETURN((write_gds_impl<uint32_t, Plane, real_t, 4>((Plane)val)));
+                case I32: DO_THEN_END_OP_RETURN((write_gds_impl<int32_t, Plane, real_t, 4>((Plane)val)));
+                case U64: DO_THEN_END_OP_RETURN((write_gds_impl<uint64_t, Plane, real_t, 4>((Plane)val)));
+                case I64: DO_THEN_END_OP_RETURN((write_gds_impl<int64_t, Plane, real_t, 4>((Plane)val)));
+                case F16: DO_THEN_END_OP_RETURN((write_gds_impl<HalfU16, Plane, real_t, 4>((Plane)val)));
+                case F32: DO_THEN_END_OP_RETURN((write_gds_impl<float, Plane, real_t, 4>((Plane)val)));
+                case F64: DO_THEN_END_OP_RETURN((write_gds_impl<double, Plane, real_t, 4>((Plane)val)));
+                default: ADD_ERROR_END_OP_RETURN(ERROR::INVALID_SERIAL_TYPE);
             }
             break;
         }
         case GODOT_TYPE::QUATERNION: {
             switch (serial_type) {
-                case BOOL: return write_gds_impl<bool, Quaternion, real_t, 4>((Quaternion)val);
-                case U8: return write_gds_impl<uint8_t, Quaternion, real_t, 4>((Quaternion)val);
-                case I8: return write_gds_impl<int8_t, Quaternion, real_t, 4>((Quaternion)val);
-                case U16: return write_gds_impl<uint16_t, Quaternion, real_t, 4>((Quaternion)val);
-                case I16: return write_gds_impl<int16_t, Quaternion, real_t, 4>((Quaternion)val);
-                case U32: return write_gds_impl<uint32_t, Quaternion, real_t, 4>((Quaternion)val);
-                case I32: return write_gds_impl<int32_t, Quaternion, real_t, 4>((Quaternion)val);
-                case U64: return write_gds_impl<uint64_t, Quaternion, real_t, 4>((Quaternion)val);
-                case I64: return write_gds_impl<int64_t, Quaternion, real_t, 4>((Quaternion)val);
-                case F16: return write_gds_impl<HalfU16, Quaternion, real_t, 4>((Quaternion)val);
-                case F32: return write_gds_impl<float, Quaternion, real_t, 4>((Quaternion)val);
-                case F64: return write_gds_impl<double, Quaternion, real_t, 4>((Quaternion)val);
-                default: ERR_FAIL_V_MSG(false, "invalid serial type for godot Quaternion");
+                case BOOL: DO_THEN_END_OP_RETURN((write_gds_impl<bool, Quaternion, real_t, 4>((Quaternion)val)));
+                case U8: DO_THEN_END_OP_RETURN((write_gds_impl<uint8_t, Quaternion, real_t, 4>((Quaternion)val)));
+                case I8: DO_THEN_END_OP_RETURN((write_gds_impl<int8_t, Quaternion, real_t, 4>((Quaternion)val)));
+                case U16: DO_THEN_END_OP_RETURN((write_gds_impl<uint16_t, Quaternion, real_t, 4>((Quaternion)val)));
+                case I16: DO_THEN_END_OP_RETURN((write_gds_impl<int16_t, Quaternion, real_t, 4>((Quaternion)val)));
+                case U32: DO_THEN_END_OP_RETURN((write_gds_impl<uint32_t, Quaternion, real_t, 4>((Quaternion)val)));
+                case I32: DO_THEN_END_OP_RETURN((write_gds_impl<int32_t, Quaternion, real_t, 4>((Quaternion)val)));
+                case U64: DO_THEN_END_OP_RETURN((write_gds_impl<uint64_t, Quaternion, real_t, 4>((Quaternion)val)));
+                case I64: DO_THEN_END_OP_RETURN((write_gds_impl<int64_t, Quaternion, real_t, 4>((Quaternion)val)));
+                case F16: DO_THEN_END_OP_RETURN((write_gds_impl<HalfU16, Quaternion, real_t, 4>((Quaternion)val)));
+                case F32: DO_THEN_END_OP_RETURN((write_gds_impl<float, Quaternion, real_t, 4>((Quaternion)val)));
+                case F64: DO_THEN_END_OP_RETURN((write_gds_impl<double, Quaternion, real_t, 4>((Quaternion)val)));
+                default: ADD_ERROR_END_OP_RETURN(ERROR::INVALID_SERIAL_TYPE);
             }
             break;
         }
         case GODOT_TYPE::BASIS: {
             switch (serial_type) {
-                case BOOL: return write_gds_impl<bool, Basis, real_t, 9>((Basis)val);
-                case U8: return write_gds_impl<uint8_t, Basis, real_t, 9>((Basis)val);
-                case I8: return write_gds_impl<int8_t, Basis, real_t, 9>((Basis)val);
-                case U16: return write_gds_impl<uint16_t, Basis, real_t, 9>((Basis)val);
-                case I16: return write_gds_impl<int16_t, Basis, real_t, 9>((Basis)val);
-                case U32: return write_gds_impl<uint32_t, Basis, real_t, 9>((Basis)val);
-                case I32: return write_gds_impl<int32_t, Basis, real_t, 9>((Basis)val);
-                case U64: return write_gds_impl<uint64_t, Basis, real_t, 9>((Basis)val);
-                case I64: return write_gds_impl<int64_t, Basis, real_t, 9>((Basis)val);
-                case F16: return write_gds_impl<HalfU16, Basis, real_t, 9>((Basis)val);
-                case F32: return write_gds_impl<float, Basis, real_t, 9>((Basis)val);
-                case F64: return write_gds_impl<double, Basis, real_t, 9>((Basis)val);
-                default: ERR_FAIL_V_MSG(false, "invalid serial type for godot Basis");
+                case BOOL: DO_THEN_END_OP_RETURN((write_gds_impl<bool, Basis, real_t, 9>((Basis)val)));
+                case U8: DO_THEN_END_OP_RETURN((write_gds_impl<uint8_t, Basis, real_t, 9>((Basis)val)));
+                case I8: DO_THEN_END_OP_RETURN((write_gds_impl<int8_t, Basis, real_t, 9>((Basis)val)));
+                case U16: DO_THEN_END_OP_RETURN((write_gds_impl<uint16_t, Basis, real_t, 9>((Basis)val)));
+                case I16: DO_THEN_END_OP_RETURN((write_gds_impl<int16_t, Basis, real_t, 9>((Basis)val)));
+                case U32: DO_THEN_END_OP_RETURN((write_gds_impl<uint32_t, Basis, real_t, 9>((Basis)val)));
+                case I32: DO_THEN_END_OP_RETURN((write_gds_impl<int32_t, Basis, real_t, 9>((Basis)val)));
+                case U64: DO_THEN_END_OP_RETURN((write_gds_impl<uint64_t, Basis, real_t, 9>((Basis)val)));
+                case I64: DO_THEN_END_OP_RETURN((write_gds_impl<int64_t, Basis, real_t, 9>((Basis)val)));
+                case F16: DO_THEN_END_OP_RETURN((write_gds_impl<HalfU16, Basis, real_t, 9>((Basis)val)));
+                case F32: DO_THEN_END_OP_RETURN((write_gds_impl<float, Basis, real_t, 9>((Basis)val)));
+                case F64: DO_THEN_END_OP_RETURN((write_gds_impl<double, Basis, real_t, 9>((Basis)val)));
+                default: ADD_ERROR_END_OP_RETURN(ERROR::INVALID_SERIAL_TYPE);
             }
             break;
         }
         case GODOT_TYPE::TRANSFORM_2D: {
             switch (serial_type) {
-                case BOOL: return write_gds_impl<bool, Transform2D, real_t, 6>((Transform2D)val);
-                case U8: return write_gds_impl<uint8_t, Transform2D, real_t, 6>((Transform2D)val);
-                case I8: return write_gds_impl<int8_t, Transform2D, real_t, 6>((Transform2D)val);
-                case U16: return write_gds_impl<uint16_t, Transform2D, real_t, 6>((Transform2D)val);
-                case I16: return write_gds_impl<int16_t, Transform2D, real_t, 6>((Transform2D)val);
-                case U32: return write_gds_impl<uint32_t, Transform2D, real_t, 6>((Transform2D)val);
-                case I32: return write_gds_impl<int32_t, Transform2D, real_t, 6>((Transform2D)val);
-                case U64: return write_gds_impl<uint64_t, Transform2D, real_t, 6>((Transform2D)val);
-                case I64: return write_gds_impl<int64_t, Transform2D, real_t, 6>((Transform2D)val);
-                case F16: return write_gds_impl<HalfU16, Transform2D, real_t, 6>((Transform2D)val);
-                case F32: return write_gds_impl<float, Transform2D, real_t, 6>((Transform2D)val);
-                case F64: return write_gds_impl<double, Transform2D, real_t, 6>((Transform2D)val);
-                default: ERR_FAIL_V_MSG(false, "invalid serial type for godot Transform2D");
+                case BOOL: DO_THEN_END_OP_RETURN((write_gds_impl<bool, Transform2D, real_t, 6>((Transform2D)val)));
+                case U8: DO_THEN_END_OP_RETURN((write_gds_impl<uint8_t, Transform2D, real_t, 6>((Transform2D)val)));
+                case I8: DO_THEN_END_OP_RETURN((write_gds_impl<int8_t, Transform2D, real_t, 6>((Transform2D)val)));
+                case U16: DO_THEN_END_OP_RETURN((write_gds_impl<uint16_t, Transform2D, real_t, 6>((Transform2D)val)));
+                case I16: DO_THEN_END_OP_RETURN((write_gds_impl<int16_t, Transform2D, real_t, 6>((Transform2D)val)));
+                case U32: DO_THEN_END_OP_RETURN((write_gds_impl<uint32_t, Transform2D, real_t, 6>((Transform2D)val)));
+                case I32: DO_THEN_END_OP_RETURN((write_gds_impl<int32_t, Transform2D, real_t, 6>((Transform2D)val)));
+                case U64: DO_THEN_END_OP_RETURN((write_gds_impl<uint64_t, Transform2D, real_t, 6>((Transform2D)val)));
+                case I64: DO_THEN_END_OP_RETURN((write_gds_impl<int64_t, Transform2D, real_t, 6>((Transform2D)val)));
+                case F16: DO_THEN_END_OP_RETURN((write_gds_impl<HalfU16, Transform2D, real_t, 6>((Transform2D)val)));
+                case F32: DO_THEN_END_OP_RETURN((write_gds_impl<float, Transform2D, real_t, 6>((Transform2D)val)));
+                case F64: DO_THEN_END_OP_RETURN((write_gds_impl<double, Transform2D, real_t, 6>((Transform2D)val)));
+                default: ADD_ERROR_END_OP_RETURN(ERROR::INVALID_SERIAL_TYPE);
             }
             break;
         }
         case GODOT_TYPE::TRANSFORM_3D: {
             switch (serial_type) {
-                case BOOL: return write_gds_impl<bool, Transform3D, real_t, 12>((Transform3D)val);
-                case U8: return write_gds_impl<uint8_t, Transform3D, real_t, 12>((Transform3D)val);
-                case I8: return write_gds_impl<int8_t, Transform3D, real_t, 12>((Transform3D)val);
-                case U16: return write_gds_impl<uint16_t, Transform3D, real_t, 12>((Transform3D)val);
-                case I16: return write_gds_impl<int16_t, Transform3D, real_t, 12>((Transform3D)val);
-                case U32: return write_gds_impl<uint32_t, Transform3D, real_t, 12>((Transform3D)val);
-                case I32: return write_gds_impl<int32_t, Transform3D, real_t, 12>((Transform3D)val);
-                case U64: return write_gds_impl<uint64_t, Transform3D, real_t, 12>((Transform3D)val);
-                case I64: return write_gds_impl<int64_t, Transform3D, real_t, 12>((Transform3D)val);
-                case F16: return write_gds_impl<HalfU16, Transform3D, real_t, 12>((Transform3D)val);
-                case F32: return write_gds_impl<float, Transform3D, real_t, 12>((Transform3D)val);
-                case F64: return write_gds_impl<double, Transform3D, real_t, 12>((Transform3D)val);
-                default: ERR_FAIL_V_MSG(false, "invalid serial type for godot Transform3D");
+                case BOOL: DO_THEN_END_OP_RETURN((write_gds_impl<bool, Transform3D, real_t, 12>((Transform3D)val)));
+                case U8: DO_THEN_END_OP_RETURN((write_gds_impl<uint8_t, Transform3D, real_t, 12>((Transform3D)val)));
+                case I8: DO_THEN_END_OP_RETURN((write_gds_impl<int8_t, Transform3D, real_t, 12>((Transform3D)val)));
+                case U16: DO_THEN_END_OP_RETURN((write_gds_impl<uint16_t, Transform3D, real_t, 12>((Transform3D)val)));
+                case I16: DO_THEN_END_OP_RETURN((write_gds_impl<int16_t, Transform3D, real_t, 12>((Transform3D)val)));
+                case U32: DO_THEN_END_OP_RETURN((write_gds_impl<uint32_t, Transform3D, real_t, 12>((Transform3D)val)));
+                case I32: DO_THEN_END_OP_RETURN((write_gds_impl<int32_t, Transform3D, real_t, 12>((Transform3D)val)));
+                case U64: DO_THEN_END_OP_RETURN((write_gds_impl<uint64_t, Transform3D, real_t, 12>((Transform3D)val)));
+                case I64: DO_THEN_END_OP_RETURN((write_gds_impl<int64_t, Transform3D, real_t, 12>((Transform3D)val)));
+                case F16: DO_THEN_END_OP_RETURN((write_gds_impl<HalfU16, Transform3D, real_t, 12>((Transform3D)val)));
+                case F32: DO_THEN_END_OP_RETURN((write_gds_impl<float, Transform3D, real_t, 12>((Transform3D)val)));
+                case F64: DO_THEN_END_OP_RETURN((write_gds_impl<double, Transform3D, real_t, 12>((Transform3D)val)));
+                default: ADD_ERROR_END_OP_RETURN(ERROR::INVALID_SERIAL_TYPE);
             }
             break;
         }
         case GODOT_TYPE::PROJECTION: {
             switch (serial_type) {
-                case BOOL: return write_gds_impl<bool, Projection, real_t, 16>((Projection)val);
-                case U8: return write_gds_impl<uint8_t, Projection, real_t, 16>((Projection)val);
-                case I8: return write_gds_impl<int8_t, Projection, real_t, 16>((Projection)val);
-                case U16: return write_gds_impl<uint16_t, Projection, real_t, 16>((Projection)val);
-                case I16: return write_gds_impl<int16_t, Projection, real_t, 16>((Projection)val);
-                case U32: return write_gds_impl<uint32_t, Projection, real_t, 16>((Projection)val);
-                case I32: return write_gds_impl<int32_t, Projection, real_t, 16>((Projection)val);
-                case U64: return write_gds_impl<uint64_t, Projection, real_t, 16>((Projection)val);
-                case I64: return write_gds_impl<int64_t, Projection, real_t, 16>((Projection)val);
-                case F16: return write_gds_impl<HalfU16, Projection, real_t, 16>((Projection)val);
-                case F32: return write_gds_impl<float, Projection, real_t, 16>((Projection)val);
-                case F64: return write_gds_impl<double, Projection, real_t, 16>((Projection)val);
-                default: ERR_FAIL_V_MSG(false, "invalid serial type for godot Projection");
+                case BOOL: DO_THEN_END_OP_RETURN((write_gds_impl<bool, Projection, real_t, 16>((Projection)val)));
+                case U8: DO_THEN_END_OP_RETURN((write_gds_impl<uint8_t, Projection, real_t, 16>((Projection)val)));
+                case I8: DO_THEN_END_OP_RETURN((write_gds_impl<int8_t, Projection, real_t, 16>((Projection)val)));
+                case U16: DO_THEN_END_OP_RETURN((write_gds_impl<uint16_t, Projection, real_t, 16>((Projection)val)));
+                case I16: DO_THEN_END_OP_RETURN((write_gds_impl<int16_t, Projection, real_t, 16>((Projection)val)));
+                case U32: DO_THEN_END_OP_RETURN((write_gds_impl<uint32_t, Projection, real_t, 16>((Projection)val)));
+                case I32: DO_THEN_END_OP_RETURN((write_gds_impl<int32_t, Projection, real_t, 16>((Projection)val)));
+                case U64: DO_THEN_END_OP_RETURN((write_gds_impl<uint64_t, Projection, real_t, 16>((Projection)val)));
+                case I64: DO_THEN_END_OP_RETURN((write_gds_impl<int64_t, Projection, real_t, 16>((Projection)val)));
+                case F16: DO_THEN_END_OP_RETURN((write_gds_impl<HalfU16, Projection, real_t, 16>((Projection)val)));
+                case F32: DO_THEN_END_OP_RETURN((write_gds_impl<float, Projection, real_t, 16>((Projection)val)));
+                case F64: DO_THEN_END_OP_RETURN((write_gds_impl<double, Projection, real_t, 16>((Projection)val)));
+                default: ADD_ERROR_END_OP_RETURN(ERROR::INVALID_SERIAL_TYPE);
             }
             break;
         }
@@ -1984,14 +2032,19 @@ bool ReaderWriter::write_gds(GODOT_TYPE type, Variant val, SERIAL_TYPE serial_ty
             switch (serial_type) {
                 case U8: {
                     Vector<uint8_t> as_utf8 = sval.to_utf8_buffer();
+                    end_op();
                     return write_t_array_len_prefix(as_utf8.ptr(), as_utf8.size());
                 }
                 case U16: {
                     Vector<uint8_t> as_utf16 = sval.to_utf16_buffer();
+                    end_op();
                     return write_t_array_len_prefix(as_utf16.ptr(), as_utf16.size());
                 }
-                case U32: return write_t_array_len_prefix(sval.ptr(), sval.size());
-                default: ERR_FAIL_V_MSG(false, "invalid serial type for godot String");
+                case U32: {
+                    end_op();
+                    return write_t_array_len_prefix(sval.ptr(), sval.size());
+                }
+                default: ADD_ERROR_END_OP_RETURN(ERROR::INVALID_SERIAL_TYPE);
             }
             break;
         }
@@ -2005,7 +2058,7 @@ bool ReaderWriter::write_gds(GODOT_TYPE type, Variant val, SERIAL_TYPE serial_ty
             for (uint32_t i = 0; i < len; i += 1) {
                 write_gds(ANY, arr[i], DEFAULT);
             }
-            return num_errors == 0;
+            return end_op();
         }
         case GODOT_TYPE::DICTIONARY: {
             if (serial_type != DEFAULT) {
@@ -2020,7 +2073,7 @@ bool ReaderWriter::write_gds(GODOT_TYPE type, Variant val, SERIAL_TYPE serial_ty
                 write_gds(ANY, keys[i], DEFAULT);
                 write_gds(ANY, vals[i], DEFAULT);
             }
-            return num_errors == 0;
+            return end_op();
         }
         case GODOT_TYPE::PACKED_BYTE_ARRAY: {
             PackedByteArray arr = PackedByteArray(val);
@@ -2087,9 +2140,9 @@ bool ReaderWriter::write_gds(GODOT_TYPE type, Variant val, SERIAL_TYPE serial_ty
                     }
                     break;
                 }
-                default: ERR_FAIL_V_MSG(false, "invalid serial type for godot PackedByteArray");
+                default: ADD_ERROR_END_OP_RETURN(ERROR::INVALID_SERIAL_TYPE);
             }
-            return num_errors == 0;
+            return end_op();
         }
         case GODOT_TYPE::PACKED_INT32_ARRAY: {
             PackedInt32Array arr = PackedInt32Array(val);
@@ -2166,9 +2219,9 @@ bool ReaderWriter::write_gds(GODOT_TYPE type, Variant val, SERIAL_TYPE serial_ty
                     }
                     break;
                 }
-                default: ERR_FAIL_V_MSG(false, "invalid serial type for godot PackedInt32Array");
+                default: ADD_ERROR_END_OP_RETURN(ERROR::INVALID_SERIAL_TYPE);
             }
-            return num_errors == 0;
+            return end_op();
         }
         case GODOT_TYPE::PACKED_INT64_ARRAY: {
             PackedInt64Array arr = PackedInt64Array(val);
@@ -2245,9 +2298,9 @@ bool ReaderWriter::write_gds(GODOT_TYPE type, Variant val, SERIAL_TYPE serial_ty
                     }
                     break;
                 }
-                default: ERR_FAIL_V_MSG(false, "invalid serial type for godot PackedInt64Array");
+                default: ADD_ERROR_END_OP_RETURN(ERROR::INVALID_SERIAL_TYPE);
             }
-            return num_errors == 0;
+            return end_op();
         }
         case GODOT_TYPE::PACKED_FLOAT32_ARRAY: {
             PackedFloat32Array arr = PackedFloat32Array(val);
@@ -2324,9 +2377,9 @@ bool ReaderWriter::write_gds(GODOT_TYPE type, Variant val, SERIAL_TYPE serial_ty
                     }
                     break;
                 }
-                default: ERR_FAIL_V_MSG(false, "invalid serial type for godot PackedFloat32Array");
+                default: ADD_ERROR_END_OP_RETURN(ERROR::INVALID_SERIAL_TYPE);
             }
-            return num_errors == 0;
+            return end_op();
         }
         case GODOT_TYPE::PACKED_FLOAT64_ARRAY: {
             PackedFloat64Array arr = PackedFloat64Array(val);
@@ -2403,9 +2456,9 @@ bool ReaderWriter::write_gds(GODOT_TYPE type, Variant val, SERIAL_TYPE serial_ty
                     write_t_array(arr.ptr(), len);
                     break;
                 }
-                default: ERR_FAIL_V_MSG(false, "invalid serial type for godot PackedFloat64Array");
+                default: ADD_ERROR_END_OP_RETURN(ERROR::INVALID_SERIAL_TYPE);
             }
-            return num_errors == 0;
+            return end_op();
         }
         case GODOT_TYPE::PACKED_VECTOR2_ARRAY: {
             PackedVector2Array arr = (PackedVector2Array)val;
@@ -2492,9 +2545,9 @@ bool ReaderWriter::write_gds(GODOT_TYPE type, Variant val, SERIAL_TYPE serial_ty
                     }
                     break;
                 }
-                default: ERR_FAIL_V_MSG(false, "invalid serial type for godot PackedVector2Array");
+                default: ADD_ERROR_END_OP_RETURN(ERROR::INVALID_SERIAL_TYPE);
             }
-            return num_errors == 0;
+            return end_op();
         }
         case GODOT_TYPE::PACKED_VECTOR3_ARRAY: {
             PackedVector3Array arr = (PackedVector3Array)val;
@@ -2581,9 +2634,9 @@ bool ReaderWriter::write_gds(GODOT_TYPE type, Variant val, SERIAL_TYPE serial_ty
                     }
                     break;
                 }
-                default: ERR_FAIL_V_MSG(false, "invalid serial type for godot PackedVector3Array");
+                default: ADD_ERROR_END_OP_RETURN(ERROR::INVALID_SERIAL_TYPE);
             }
-            return num_errors == 0;
+            return end_op();
         }
         case GODOT_TYPE::PACKED_VECTOR4_ARRAY: {
             PackedVector4Array arr = (PackedVector4Array)val;
@@ -2670,9 +2723,9 @@ bool ReaderWriter::write_gds(GODOT_TYPE type, Variant val, SERIAL_TYPE serial_ty
                     }
                     break;
                 }
-                default: ERR_FAIL_V_MSG(false, "invalid serial type for godot PackedVector4Array");
+                default: ADD_ERROR_END_OP_RETURN(ERROR::INVALID_SERIAL_TYPE);
             }
-            return num_errors == 0;
+            return end_op();
         }
         case GODOT_TYPE::PACKED_COLOR_ARRAY: {
             PackedColorArray arr = (PackedColorArray)val;
@@ -2749,9 +2802,9 @@ bool ReaderWriter::write_gds(GODOT_TYPE type, Variant val, SERIAL_TYPE serial_ty
                     }
                     break;
                 }
-                default: ERR_FAIL_V_MSG(false, "invalid serial type for godot PackedColorArray");
+                default: ADD_ERROR_END_OP_RETURN(ERROR::INVALID_SERIAL_TYPE);
             }
-            return num_errors == 0;
+            return end_op();
         }
         case GODOT_TYPE::PACKED_STRING_ARRAY: {
             PackedStringArray arr = (PackedStringArray)val;
@@ -2786,80 +2839,81 @@ bool ReaderWriter::write_gds(GODOT_TYPE type, Variant val, SERIAL_TYPE serial_ty
                     }
                     break;
                 }
-                default: ERR_FAIL_V_MSG(false, "invalid serial type for godot String");
+                default: ADD_ERROR_END_OP_RETURN(ERROR::INVALID_SERIAL_TYPE);
             }
-            return num_errors == 0;
+            return end_op();
         }
-        default: ERR_FAIL_V_MSG(false, "invalid godot type for serialization");
+        default: ADD_ERROR_END_OP_RETURN(ERROR::INVALID_GODOT_TYPE);
     }
 }
 
 template<typename T>
 bool ReaderWriter::get_t_array(T* val_dst, uint32_t count) {
-    get_bytes(reinterpret_cast<void*>(val_dst), count * sizeof(T));
-    return num_errors == 0;
+    return get_bytes(reinterpret_cast<void*>(val_dst), count * sizeof(T));
 }
 
 template<typename T>
 bool ReaderWriter::read_t_array(T* val_dst, uint32_t count) {
-    read_bytes(reinterpret_cast<void*>(val_dst), count * sizeof(T));
-    return num_errors == 0;
+    return read_bytes(reinterpret_cast<void*>(val_dst), count * sizeof(T));
 }
 
 template<typename T>
 bool ReaderWriter::set_t_array(const T* val_src, uint32_t count) {
-    set_bytes(reinterpret_cast<const void*>(val_src), count * sizeof(T));
-    return num_errors == 0;
+    return set_bytes(reinterpret_cast<const void*>(val_src), count * sizeof(T));
 }
 
 template<typename T>
 bool ReaderWriter::write_t_array(const T* val_src, uint32_t count) {
-    write_bytes(reinterpret_cast<const void*>(val_src), count * sizeof(T));
-    return num_errors > 0;
+    return write_bytes(reinterpret_cast<const void*>(val_src), count * sizeof(T));
 }
 
 template<typename T_SERIAL, typename T_NATIVE>
 bool ReaderWriter::get_t_cast_array(T_NATIVE* val_dst, uint32_t count) {
+    start_op();
     int64_t init_pos = get_read_pos();
     for (uint32_t i = 0; i < count; i += 1) {
         read_t_cast<T_SERIAL>(val_dst);
         val_dst += 1;
     }
     seek_read_pos(init_pos, SEEK::FROM_START);
-    return num_errors == 0;
+    return end_op();
 }
 
 template<typename T_SERIAL, typename T_NATIVE>
 bool ReaderWriter::read_t_cast_array(T_NATIVE* val_dst, uint32_t count) {
+    start_op();
     for (uint32_t i = 0; i < count; i += 1) {
         read_t_cast<T_SERIAL>(val_dst);
         val_dst += 1;
     }
-    return num_errors == 0;
+    return end_op();
 }
 
 template<typename T_SERIAL, typename T_NATIVE>
 bool ReaderWriter::set_t_cast_array(const T_NATIVE* val_src, uint32_t count) {
+    start_op();
     int64_t init_pos = get_write_pos();
     for (uint32_t i = 0; i < count; i += 1) {
         set_t_cast<T_SERIAL>(val_src);
         val_src += 1;
     }
     seek_write_pos(init_pos, SEEK::FROM_START);
-    return num_errors == 0;
+    return end_op();
 }
 
 template<typename T_SERIAL, typename T_NATIVE>
 bool ReaderWriter::write_t_cast_array(const T_NATIVE* val_src, uint32_t count) {
+    start_op();
     for (uint32_t i = 0; i < count; i += 1) {
         write_t_cast<T_SERIAL>(val_src);
         val_src += 1;
     }
-    return num_errors == 0;
+    return end_op();
 }
 
 template<typename T_SERIAL, typename T_NATIVE, typename T_ARRAY>
 T_ARRAY ReaderWriter::get_t_cast_array_class(T_ARRAY arr, uint32_t arr_offset, uint32_t count) {
+    start_op();
     uint32_t end = arr_offset + count;
     int64_t init_pos = get_read_pos();
     arr.resize(end);
@@ -2869,11 +2923,13 @@ T_ARRAY ReaderWriter::get_t_cast_array_class(T_ARRAY arr, uint32_t arr_offset, u
         arr[i] = Variant(val);
     }
     seek_read_pos(init_pos, SEEK::FROM_START);
+    end_op();
     return arr;
 }
 
 template<typename T_SERIAL, typename T_NATIVE, typename T_ARRAY>
 T_ARRAY ReaderWriter::read_t_cast_array_class(T_ARRAY arr, uint32_t arr_offset, uint32_t count) {
+    start_op();
     uint32_t end = arr_offset + count;
     arr.resize(end);
     for (uint32_t i = arr_offset; i < end; i += 1) {
@@ -2881,101 +2937,115 @@ T_ARRAY ReaderWriter::read_t_cast_array_class(T_ARRAY arr, uint32_t arr_offset, 
         read_t_cast<T_SERIAL>(&val);
         arr[i] = Variant(val);
     }
+    end_op();
     return arr;
 }
 
 template<typename T_SERIAL, typename T_NATIVE, typename T_ARRAY>
-bool ReaderWriter::set_t_cast_array_class(T_ARRAY arr, uint32_t arr_offset, uint32_t count) {
+bool ReaderWriter::set_t_cast_array_class(T_ARRAY src_array, uint32_t arr_offset, uint32_t count) {
+    start_op();
     uint32_t end = arr_offset + count;
-    ERR_FAIL_COND_V_MSG(end > static_cast<uint32_t>(arr.size()), ERROR::ARRAY_SOURCE_TOO_SHORT_FOR_OFFSET_AND_COUNT, "`arr_offset` + `count` is greater than the `size()` of the array provided as the data source");
+    ADD_ERROR_END_OP_RETURN_IF(end > static_cast<uint32_t>(src_array.size()), ERROR::OUT_OF_DATA_TO_READ);
     int64_t init_pos = get_write_pos();
     for (uint32_t i = arr_offset; i < end; i += 1) {
-        write_t_cast<T_SERIAL>((T_NATIVE)arr[i]);
+        write_t_cast<T_SERIAL>((T_NATIVE)src_array[i]);
     }
     seek_write_pos(init_pos, SEEK::FROM_START);
-    return num_errors == 0;
+    return end_op();
 }
 
 template<typename T_SERIAL, typename T_NATIVE, typename T_ARRAY>
-bool ReaderWriter::write_t_cast_array_class(T_ARRAY arr, uint32_t arr_offset, uint32_t count) {
+bool ReaderWriter::write_t_cast_array_class(T_ARRAY src_array, uint32_t arr_offset, uint32_t count) {
+    start_op();
     uint32_t end = arr_offset + count;
-    ERR_FAIL_COND_V_MSG(end > static_cast<uint32_t>(arr.size()), ERROR::ARRAY_SOURCE_TOO_SHORT_FOR_OFFSET_AND_COUNT, "`arr_offset` + `count` is greater than the `size()` of the array provided as the data source");
+    ADD_ERROR_END_OP_RETURN_IF(end > static_cast<uint32_t>(src_array.size()), ERROR::OUT_OF_DATA_TO_READ);
     for (uint32_t i = arr_offset; i < end; i += 1) {
-        write_t_cast<T_SERIAL>((T_NATIVE)arr[i]);
+        write_t_cast<T_SERIAL>((T_NATIVE)src_array[i]);
     }
-    return num_errors == 0;
+    return end_op();
 }
 
 template<typename T_SERIAL, typename T_NATIVE, typename T_ARRAY, typename T_NATIVE_ELEM, uint32_t T_NATIVE_ELEM_COUNT>
 T_ARRAY ReaderWriter::get_gds_array(T_ARRAY dest_array, uint32_t array_offset, uint32_t count) {
+    start_op();
     int64_t initial_pos = get_read_pos();
     T_ARRAY arr = read_gds_array<T_SERIAL, T_NATIVE, T_ARRAY, T_NATIVE_ELEM, T_NATIVE_ELEM_COUNT>(dest_array, array_offset, count);
     seek_read_pos(initial_pos, SEEK::FROM_START);
+    end_op();
     return arr;
 }
 
 template<typename T_SERIAL, typename T_NATIVE, typename T_ARRAY, typename T_NATIVE_ELEM, uint32_t T_NATIVE_ELEM_COUNT>
 T_ARRAY ReaderWriter::read_gds_array(T_ARRAY dest_array, uint32_t array_offset, uint32_t count) {
+    start_op();
     uint32_t end = array_offset + count;
     dest_array.resize(end);
     for (uint32_t i = array_offset; i < end; i += 1) {
         dest_array[i] = read_gds_impl<T_SERIAL, T_NATIVE, T_NATIVE_ELEM, T_NATIVE_ELEM_COUNT>();
     }
+    end_op();
     return dest_array;
 }
 
 template<typename T_SERIAL, typename T_NATIVE, typename T_ARRAY, typename T_NATIVE_ELEM, uint32_t T_NATIVE_ELEM_COUNT>
 bool ReaderWriter::set_gds_array(T_ARRAY src_array, uint32_t array_offset, uint32_t count) {
+    start_op();
     int64_t initial_pos = get_write_pos();
     write_gds_array<T_SERIAL, T_NATIVE, T_ARRAY, T_NATIVE_ELEM, T_NATIVE_ELEM_COUNT>(src_array, array_offset, count);
     seek_write_pos(initial_pos, SEEK::FROM_START);
-    return num_errors == 0;
+    return end_op();
 }
 
 template<typename T_SERIAL, typename T_NATIVE, typename T_ARRAY, typename T_NATIVE_ELEM, uint32_t T_NATIVE_ELEM_COUNT>
 bool ReaderWriter::write_gds_array(T_ARRAY src_array, uint32_t array_offset, uint32_t count) {
+    start_op();
     uint32_t end = array_offset + count;
-    ERR_FAIL_COND_V_MSG(end > static_cast<uint32_t>(src_array.size()), ERROR::ARRAY_SOURCE_TOO_SHORT_FOR_OFFSET_AND_COUNT, "`array_offset` + `count` is greater than the `size()` of the array provided as the data source");
+    ADD_ERROR_END_OP_RETURN_IF(end > static_cast<uint32_t>(src_array.size()), ERROR::OUT_OF_DATA_TO_READ);
     for (uint32_t i = array_offset; i < end; i += 1) {
         write_gds_impl<T_SERIAL, T_NATIVE, T_NATIVE_ELEM, T_NATIVE_ELEM_COUNT>(src_array[i]);
     }
-    return num_errors == 0;
+    return end_op();
 }
 
 template<typename T>
 bool ReaderWriter::get_t_array_len_prefix(T* val_dst) {
+    start_op();
     int64_t init_pos = get_read_pos();
     uint32_t count = read_t_val<uint32_t>();
     get_bytes(reinterpret_cast<void*>(val_dst), count * sizeof(T));
     seek_read_pos(init_pos, SEEK::FROM_START);
-    return num_errors == 0;
+    return end_op();
 }
 
 template<typename T>
 bool ReaderWriter::read_t_array_len_prefix(T* val_dst) {
+    start_op();
     uint32_t count = read_t_val<uint32_t>();
     read_bytes(reinterpret_cast<void*>(val_dst), count * sizeof(T));
-    return num_errors == 0;
+    return end_op();
 }
 
 template<typename T>
 bool ReaderWriter::set_t_array_len_prefix(const T* val_src, uint32_t count) {
+    start_op();
     int64_t init_pos = get_write_pos();
     write_t_val(count);
     set_bytes(reinterpret_cast<const void*>(val_src), count * sizeof(T));
     seek_write_pos(init_pos, SEEK::FROM_START);
-    return num_errors == 0;
+    return end_op();
 }
 
 template<typename T>
 bool ReaderWriter::write_t_array_len_prefix(const T* val_src, uint32_t count) {
+    start_op();
     write_t_val(count);
     write_bytes(reinterpret_cast<const void*>(val_src), count * sizeof(T));
-    return num_errors == 0;
+    return end_op();
 }
 
 template<typename T_SERIAL, typename T_NATIVE>
 bool ReaderWriter::get_t_cast_array_len_prefix(T_NATIVE* val_dst) {
+    start_op();
     int64_t init_pos = get_read_pos();
     uint32_t count;
     read_t(&count);
@@ -2984,22 +3054,24 @@ bool ReaderWriter::get_t_cast_array_len_prefix(T_NATIVE* val_dst) {
         val_dst += 1;
     }
     seek_read_pos(init_pos, SEEK::FROM_START);
-    return num_errors == 0;
+    return end_op();
 }
 
 template<typename T_SERIAL, typename T_NATIVE>
 bool ReaderWriter::read_t_cast_array_len_prefix(T_NATIVE* val_dst) {
+    start_op();
     uint32_t count;
     read_t(&count);
     for (uint32_t i = 0; i < count; i += 1) {
         read_t_cast<T_SERIAL>(val_dst);
         val_dst += 1;
     }
-    return num_errors == 0;
+    return end_op();
 }
 
 template<typename T_SERIAL, typename T_NATIVE>
 bool ReaderWriter::set_t_cast_array_len_prefix(const T_NATIVE* val_src, uint32_t count) {
+    start_op();
     int64_t init_pos = get_write_pos();
     write_t(&count);
     for (uint32_t i = 0; i < count; i += 1) {
@@ -3007,21 +3079,23 @@ bool ReaderWriter::set_t_cast_array_len_prefix(const T_NATIVE* val_src, uint32_t
         val_src += 1;
     }
     seek_write_pos(init_pos, SEEK::FROM_START);
-    return num_errors == 0;
+    return end_op();
 }
 
 template<typename T_SERIAL, typename T_NATIVE>
 bool ReaderWriter::write_t_cast_array_len_prefix(const T_NATIVE* val_src, uint32_t count) {
+    start_op();
     write_t(&count);
     for (uint32_t i = 0; i < count; i += 1) {
         write_t_cast<T_SERIAL>(val_src);
         val_src += 1;
     }
-    return num_errors == 0;
+    return end_op();
 }
 
 template<typename T_SERIAL, typename T_NATIVE, typename T_ARRAY>
 T_ARRAY ReaderWriter::get_t_cast_array_class_len_prefix(T_ARRAY arr, uint32_t arr_offset) {
+    start_op();
     int64_t init_pos = get_read_pos();
     uint32_t count;
     read_t(&count);
@@ -3033,11 +3107,13 @@ T_ARRAY ReaderWriter::get_t_cast_array_class_len_prefix(T_ARRAY arr, uint32_t ar
         arr[i] = Variant(val);
     }
     seek_read_pos(init_pos, SEEK::FROM_START);
+    end_op();
     return arr;
 }
 
 template<typename T_SERIAL, typename T_NATIVE, typename T_ARRAY>
 T_ARRAY ReaderWriter::read_t_cast_array_class_len_prefix(T_ARRAY arr, uint32_t arr_offset) {
+    start_op();
     uint32_t count;
     read_t(&count);
     uint32_t end = arr_offset + count;
@@ -3047,68 +3123,151 @@ T_ARRAY ReaderWriter::read_t_cast_array_class_len_prefix(T_ARRAY arr, uint32_t a
         read_t_cast<T_SERIAL>(&val);
         arr[i] = Variant(val);
     }
+    end_op();
     return arr;
 }
 
 template<typename T_SERIAL, typename T_NATIVE, typename T_ARRAY>
-bool ReaderWriter::set_t_cast_array_class_len_prefix(T_ARRAY arr, uint32_t arr_offset, uint32_t count) {
+bool ReaderWriter::set_t_cast_array_class_len_prefix(T_ARRAY src_array, uint32_t arr_offset, uint32_t count) {
+    start_op();
     uint32_t end = arr_offset + count;
-    ERR_FAIL_COND_V_MSG(end > static_cast<uint32_t>(arr.size()), ERROR::ARRAY_SOURCE_TOO_SHORT_FOR_OFFSET_AND_COUNT, "`arr_offset` + `count` is greater than the `size()` of the array provided as the data source");
+    ADD_ERROR_END_OP_RETURN_IF(end > static_cast<uint32_t>(src_array.size()), ERROR::OUT_OF_DATA_TO_READ);
     int64_t init_pos = get_write_pos();
     write_t(&count);
     for (uint32_t i = arr_offset; i < end; i += 1) {
-        write_t_cast<T_SERIAL>((T_NATIVE)arr[i]);
+        write_t_cast<T_SERIAL>((T_NATIVE)src_array[i]);
     }
     seek_write_pos(init_pos, SEEK::FROM_START);
-    return num_errors == 0;
+    return end_op();
 }
 template<typename T_SERIAL, typename T_NATIVE, typename T_ARRAY>
-bool ReaderWriter::write_t_cast_array_class_len_prefix(T_ARRAY arr, uint32_t arr_offset, uint32_t count) {
+bool ReaderWriter::write_t_cast_array_class_len_prefix(T_ARRAY src_array, uint32_t arr_offset, uint32_t count) {
+    start_op();
     uint32_t end = arr_offset + count;
-    ERR_FAIL_COND_V_MSG(end > static_cast<uint32_t>(arr.size()), ERROR::ARRAY_SOURCE_TOO_SHORT_FOR_OFFSET_AND_COUNT, "`arr_offset` + `count` is greater than the `size()` of the array provided as the data source");
+    ADD_ERROR_END_OP_RETURN_IF(end > static_cast<uint32_t>(src_array.size()), ERROR::OUT_OF_DATA_TO_READ);
     write_t(&count);
     for (uint32_t i = arr_offset; i < end; i += 1) {
-        write_t_cast<T_SERIAL>((T_NATIVE)arr[i]);
+        write_t_cast<T_SERIAL>((T_NATIVE)src_array[i]);
     }
-    return num_errors == 0;
+    return end_op();
 }
 
 
 template<typename T_SERIAL, typename T_NATIVE, typename T_ARRAY, typename T_NATIVE_ELEM, uint32_t T_NATIVE_ELEM_COUNT>
 T_ARRAY ReaderWriter::get_gds_array_len_prefix(T_ARRAY dest_array, uint32_t array_offset) {
+    start_op();
     int64_t initial_pos = get_read_pos();
     T_ARRAY arr = read_gds_array_len_prefix<T_SERIAL, T_NATIVE, T_ARRAY, T_NATIVE_ELEM, T_NATIVE_ELEM_COUNT>(dest_array, array_offset);
     seek_read_pos(initial_pos, SEEK::FROM_START);
+    end_op();
     return arr;
 }
 template<typename T_SERIAL, typename T_NATIVE, typename T_ARRAY, typename T_NATIVE_ELEM, uint32_t T_NATIVE_ELEM_COUNT>
 T_ARRAY ReaderWriter::read_gds_array_len_prefix(T_ARRAY dest_array, uint32_t array_offset) {
+    start_op();
     uint32_t count = read_t_val<uint32_t>();
     uint32_t end = array_offset + count;
     dest_array.resize(end);
     for (uint32_t i = array_offset; i < end; i += 1) {
         dest_array[i] = read_gds_impl<T_SERIAL, T_NATIVE, T_NATIVE_ELEM, T_NATIVE_ELEM_COUNT>();
     }
+    end_op();
     return dest_array;
 }
 
 template<typename T_SERIAL, typename T_NATIVE, typename T_ARRAY, typename T_NATIVE_ELEM, uint32_t T_NATIVE_ELEM_COUNT>
 bool ReaderWriter::set_gds_array_len_prefix(T_ARRAY src_array, uint32_t array_offset, uint32_t count) {
+    start_op();
     int64_t initial_pos = get_write_pos();
     write_gds_array_len_prefix<T_SERIAL, T_NATIVE, T_ARRAY, T_NATIVE_ELEM, T_NATIVE_ELEM_COUNT>(src_array, array_offset, count);
     seek_write_pos(initial_pos, SEEK::FROM_START);
-    return num_errors == 0;
+    return end_op();
 }
 
 template<typename T_SERIAL, typename T_NATIVE, typename T_ARRAY, typename T_NATIVE_ELEM, uint32_t T_NATIVE_ELEM_COUNT>
 bool ReaderWriter::write_gds_array_len_prefix(T_ARRAY src_array, uint32_t array_offset, uint32_t count) {
+    start_op();
     uint32_t end = array_offset + count;
-    ERR_FAIL_COND_V_MSG(end > static_cast<uint32_t>(src_array.size()), ERROR::ARRAY_SOURCE_TOO_SHORT_FOR_OFFSET_AND_COUNT, "`array_offset` + `count` is greater than the `size()` of the array provided as the data source");
+    ADD_ERROR_END_OP_RETURN_IF(end > static_cast<uint32_t>(src_array.size()), ERROR::OUT_OF_DATA_TO_READ);
     write_t_val(count);
     for (uint32_t i = array_offset; i < end; i += 1) {
         write_gds_impl<T_SERIAL, T_NATIVE, T_NATIVE_ELEM, T_NATIVE_ELEM_COUNT>(src_array[i]);
     }
-    return num_errors == 0;
+    return end_op();
+}
+
+bool ReaderWriter::get_serializable(Ref<Serializer> ser) {
+    start_op();
+    ADD_ERROR_END_OP_RETURN_IF(!ser.is_valid(), ERROR::INVALID_SERIALIZER);
+    int64_t initial_pos = get_read_pos();
+    ser->deserialize(Ref<ReaderWriter>(this));
+    seek_read_pos(initial_pos, SEEK::FROM_START);
+    return end_op();
+}
+bool ReaderWriter::read_serializable(Ref<Serializer> ser) {
+    start_op();
+    ADD_ERROR_END_OP_RETURN_IF(!ser.is_valid(), ERROR::INVALID_SERIALIZER);
+    ser->deserialize(Ref<ReaderWriter>(this));
+    return end_op();
+}
+bool ReaderWriter::set_serializable(Ref<Serializer> ser) {
+    start_op();
+    ADD_ERROR_END_OP_RETURN_IF(!ser.is_valid(), ERROR::INVALID_SERIALIZER);
+    int64_t initial_pos = get_write_pos();
+    ser->serialize(Ref<ReaderWriter>(this));
+    seek_write_pos(initial_pos, SEEK::FROM_START);
+    return end_op();
+}
+bool ReaderWriter::write_serializable(Ref<Serializer> ser) {
+    start_op();
+    ADD_ERROR_END_OP_RETURN_IF(!ser.is_valid(), ERROR::INVALID_SERIALIZER);
+    ser->serialize(Ref<ReaderWriter>(this));
+    return end_op();
+}
+
+bool ReaderWriter::get_serializable_array(Array array_of_serializers, uint32_t count) {
+    start_op();
+    int64_t initial_pos = get_read_pos();
+    for (uint32_t i = 0; i < count; i += 1) {
+        Variant maybe_ser = array_of_serializers[i];
+        Ref<Serializer> ser = Ref<Serializer>(Object::cast_to<Serializer>(array_of_serializers[i]));
+        ADD_ERROR_END_OP_RETURN_IF(!ser.is_valid(), ERROR::INVALID_SERIALIZER);
+        ser->deserialize(Ref<ReaderWriter>(this));
+    }
+    seek_read_pos(initial_pos, SEEK::FROM_START);
+    return end_op();
+}
+bool ReaderWriter::read_serializable_array(Array array_of_serializers, uint32_t count) {
+    start_op();
+    for (uint32_t i = 0; i < count; i += 1) {
+        Variant maybe_ser = array_of_serializers[i];
+        Ref<Serializer> ser = Ref<Serializer>(Object::cast_to<Serializer>(array_of_serializers[i]));
+        ADD_ERROR_END_OP_RETURN_IF(!ser.is_valid(), ERROR::INVALID_SERIALIZER);
+        ser->deserialize(Ref<ReaderWriter>(this));
+    }
+    return end_op();
+}
+bool ReaderWriter::set_serializable_array(Array array_of_serializers, uint32_t count) {
+    start_op();
+    int64_t initial_pos = get_write_pos();
+    for (uint32_t i = 0; i < count; i += 1) {
+        Variant maybe_ser = array_of_serializers[i];
+        Ref<Serializer> ser = Ref<Serializer>(Object::cast_to<Serializer>(array_of_serializers[i]));
+        ADD_ERROR_END_OP_RETURN_IF(!ser.is_valid(), ERROR::INVALID_SERIALIZER);
+        ser->serialize(Ref<ReaderWriter>(this));
+    }
+    seek_write_pos(initial_pos, SEEK::FROM_START);
+    return end_op();
+}
+bool ReaderWriter::write_serializable_array(Array array_of_serializers, uint32_t count) {
+    start_op();
+    for (uint32_t i = 0; i < count; i += 1) {
+        Variant maybe_ser = array_of_serializers[i];
+        Ref<Serializer> ser = Ref<Serializer>(Object::cast_to<Serializer>(array_of_serializers[i]));
+        ADD_ERROR_END_OP_RETURN_IF(!ser.is_valid(), ERROR::INVALID_SERIALIZER);
+        ser->serialize(Ref<ReaderWriter>(this));
+    }
+    return end_op();
 }
 
 
@@ -3124,16 +3283,16 @@ Ref<ReaderWriter_FileAccess> ReaderWriter::from_file_access(Ref<FileAccess> file
 }
 
 int64_t ReaderWriter_FileAccess::get_read_pos() {
-    ADD_ERROR_RETURN_ZERO_IF(!file_access->is_open(), ERROR::INVALID_STATE)
+    ADD_ERROR_END_OP_RETURN_ZERO_IF(!file_access->is_open(), ERROR::INVALID_READER_WRITER)
     return static_cast<int64_t>(file_access->get_position());
 }
 int64_t ReaderWriter_FileAccess::get_write_pos() {
-    ADD_ERROR_RETURN_ZERO_IF(!file_access->is_open(), ERROR::INVALID_STATE)
+    ADD_ERROR_END_OP_RETURN_ZERO_IF(!file_access->is_open(), ERROR::INVALID_READER_WRITER)
     return static_cast<int64_t>(file_access->get_position());
 }
 bool ReaderWriter_FileAccess::seek_read_pos(int64_t delta, SEEK from) {
-    clear_deltas();
-    ADD_ERROR_RETURN_FALSE_IF(!file_access->is_open(), ERROR::INVALID_STATE)
+    start_op();
+    ADD_ERROR_END_OP_RETURN_IF(!file_access->is_open(), ERROR::INVALID_READER_WRITER)
     int64_t pos = static_cast<int64_t>(file_access->get_position());
     int64_t new_pos = pos;
     switch (from) {
@@ -3163,19 +3322,19 @@ bool ReaderWriter_FileAccess::seek_read_pos(int64_t delta, SEEK from) {
             ADD_ERROR_IF(e > 0, ERROR::SEEK_BEFORE_DATA_RANGE)
             break;
         }
-        default: ADD_ERROR_RETURN_FALSE(ERROR::INVALID_ENUM_INPUT)
+        default: ADD_ERROR_END_OP_BLOCK(ERROR::INVALID_SEEK_ENUM)
     }
     new_pos = static_cast<int64_t>(file_access->get_position());
     last_seek_delta = new_pos - pos;
     last_bytes_copied = 0;
-    return num_errors_this_op == 0;
+    return end_op();
 }
 bool ReaderWriter_FileAccess::seek_write_pos(int64_t delta, SEEK from) {
     return seek_read_pos(delta, from);
 }
 bool ReaderWriter_FileAccess::read_bytes(void* data_dst, uint32_t num_bytes, bool no_seek, bool no_copy) {
-    clear_deltas();
-    ADD_ERROR_RETURN_FALSE_IF(!file_access->is_open(), ERROR::INVALID_STATE)
+    start_op();
+    ADD_ERROR_END_OP_RETURN_IF(!file_access->is_open(), ERROR::INVALID_READER_WRITER)
     uint64_t num_read = 0;
     uint64_t init_pos = file_access->get_position();
     if (no_copy) {
@@ -3192,11 +3351,11 @@ bool ReaderWriter_FileAccess::read_bytes(void* data_dst, uint32_t num_bytes, boo
     } else {
         last_seek_delta = num_read;
     }
-    return num_errors_this_op == 0;
+    return end_op();
 }
 bool ReaderWriter_FileAccess::write_bytes(const void* data_src, uint32_t num_bytes, bool no_seek, bool no_copy) {
-    clear_deltas();
-    ADD_ERROR_RETURN_FALSE_IF(!file_access->is_open(), ERROR::INVALID_STATE)
+    start_op();
+    ADD_ERROR_END_OP_RETURN_IF(!file_access->is_open(), ERROR::INVALID_READER_WRITER)
     uint64_t num_written = 0;
     uint64_t init_pos = file_access->get_position();
     if (no_copy) {
@@ -3214,7 +3373,7 @@ bool ReaderWriter_FileAccess::write_bytes(const void* data_src, uint32_t num_byt
     } else {
         last_seek_delta = num_written;
     }
-    return num_errors_this_op == 0;
+    return end_op();
 }
 
 /*****************
@@ -3234,7 +3393,7 @@ int64_t ReaderWriter_PackedByteArray::get_write_pos() {
     return wpos;
 }
 bool ReaderWriter_PackedByteArray::seek_read_pos(int64_t delta, SEEK from) {
-    clear_deltas();
+    start_op();
     int64_t old_pos = rpos;
     int64_t new_pos = old_pos;
     int64_t len = static_cast<int64_t>(array.size());
@@ -3251,17 +3410,17 @@ bool ReaderWriter_PackedByteArray::seek_read_pos(int64_t delta, SEEK from) {
             new_pos = len + delta;
             break;
         }
-        default: ADD_ERROR_RETURN_FALSE(ERROR::INVALID_ENUM_INPUT)
+        default: ADD_ERROR_END_OP_BLOCK(ERROR::INVALID_SEEK_ENUM)
     }
     ADD_ERROR_IF(new_pos < 0, ERROR::SEEK_BEFORE_DATA_RANGE)
     ELSE_ADD_ERROR_IF(new_pos > len, ERROR::SEEK_AFTER_DATA_RANGE)
     new_pos = MAX((int64_t)0, MIN(new_pos, len));
     rpos = new_pos;
     last_seek_delta = new_pos - old_pos;
-    return num_errors_this_op == 0;
+    return end_op();
 }
 bool ReaderWriter_PackedByteArray::seek_write_pos(int64_t delta, SEEK from) {
-    clear_deltas();
+    start_op();
     int64_t old_pos = wpos;
     int64_t new_pos = old_pos;
     int64_t len = static_cast<int64_t>(array.size());
@@ -3278,17 +3437,17 @@ bool ReaderWriter_PackedByteArray::seek_write_pos(int64_t delta, SEEK from) {
             new_pos = len + delta;
             break;
         }
-        default: ADD_ERROR_RETURN_FALSE(ERROR::INVALID_ENUM_INPUT)
+        default: ADD_ERROR_END_OP_BLOCK(ERROR::INVALID_SEEK_ENUM)
     }
     ADD_ERROR_IF(new_pos < 0, ERROR::SEEK_BEFORE_DATA_RANGE)
     ELSE_ADD_ERROR_IF(new_pos > len, ERROR::SEEK_AFTER_DATA_RANGE)
     new_pos = MAX((int64_t)0, MIN(new_pos, len));
     wpos = new_pos;
     last_seek_delta = new_pos - old_pos;
-    return num_errors_this_op == 0;
+    return end_op();
 }
 bool ReaderWriter_PackedByteArray::read_bytes(void* data_dst, uint32_t num_bytes, bool no_seek, bool no_copy) {
-    clear_deltas();
+    start_op();
     int64_t end = rpos + static_cast<int64_t>(num_bytes);
     int64_t len = static_cast<int64_t>(array.size());
     ADD_ERROR_IF(end > len, ERROR::OUT_OF_DATA_TO_READ)
@@ -3303,10 +3462,10 @@ bool ReaderWriter_PackedByteArray::read_bytes(void* data_dst, uint32_t num_bytes
         last_seek_delta = real_num_bytes;
         rpos = end;
     }
-    return num_errors_this_op == 0;
+    return end_op();
 }
 bool ReaderWriter_PackedByteArray::write_bytes(const void* data_src, uint32_t num_bytes, bool no_seek, bool no_copy) {
-    clear_deltas();
+    start_op();
     int64_t end = wpos + static_cast<int64_t>(num_bytes);
     if (!no_copy) {
         array.resize(end);
@@ -3318,7 +3477,7 @@ bool ReaderWriter_PackedByteArray::write_bytes(const void* data_src, uint32_t nu
         last_seek_delta = num_bytes;
         wpos = end;
     }
-    return true;
+    return end_op();
 }
 
 /*****************
@@ -3332,24 +3491,24 @@ Ref<ReaderWriter_StreamPeer> ReaderWriter::from_stream_peer(Ref<StreamPeer> stre
 }
 
 int64_t ReaderWriter_StreamPeer::get_read_pos() {
-    ADD_ERROR_RETURN_ZERO_IF(!stream.is_valid(), ERROR::INVALID_STATE)
+    ADD_ERROR_IF(!stream.is_valid(), ERROR::INVALID_READER_WRITER)
     return 0;
 }
 int64_t ReaderWriter_StreamPeer::get_write_pos() {
-    ADD_ERROR_RETURN_ZERO_IF(!stream.is_valid(), ERROR::INVALID_STATE)
+    ADD_ERROR_IF(!stream.is_valid(), ERROR::INVALID_READER_WRITER)
     return 0;
 }
 bool ReaderWriter_StreamPeer::seek_read_pos(int64_t delta, SEEK from) {
-    clear_deltas();
-    ADD_ERROR_RETURN_FALSE(ERROR::CANNOT_SEEK_READ);
+    start_op();
+    ADD_ERROR_END_OP_RETURN(ERROR::CANNOT_SEEK_READ);
 }
 bool ReaderWriter_StreamPeer::seek_write_pos(int64_t delta, SEEK from) {
-    clear_deltas();
-    ADD_ERROR_RETURN_FALSE(ERROR::CANNOT_SEEK_WRITE);
+    start_op();
+    ADD_ERROR_END_OP_RETURN(ERROR::CANNOT_SEEK_WRITE);
 }
 bool ReaderWriter_StreamPeer::read_bytes(void* data_dst, uint32_t num_bytes, bool no_seek, bool no_copy) {
-    clear_deltas();
-    ADD_ERROR_RETURN_FALSE_IF(!stream.is_valid(), ERROR::INVALID_STATE)
+    start_op();
+    ADD_ERROR_END_OP_RETURN_IF(!stream.is_valid(), ERROR::INVALID_READER_WRITER)
     int num_read = 0;
     last_bytes_copied = static_cast<int64_t>(num_read);
     if (no_copy) {
@@ -3372,11 +3531,11 @@ bool ReaderWriter_StreamPeer::read_bytes(void* data_dst, uint32_t num_bytes, boo
         ELSE_ADD_ERROR_IF(e > 0, ERROR::READ_ERROR)
         last_bytes_copied = num_bytes;
     }
-    return num_errors_this_op == 0;
+    return end_op();
 }
 bool ReaderWriter_StreamPeer::write_bytes(const void* data_src, uint32_t num_bytes, bool no_seek, bool no_copy) {
-    clear_deltas();
-    ADD_ERROR_RETURN_FALSE_IF(!stream.is_valid(), ERROR::INVALID_STATE)
+    start_op();
+    ADD_ERROR_END_OP_RETURN_IF(!stream.is_valid(), ERROR::INVALID_READER_WRITER)
     int num_written = 0;
     if (no_copy) {
         WARN_PRINT("performing a 'write' on a StreamPeer with `no_copy == true` does nothing");
@@ -3386,7 +3545,7 @@ bool ReaderWriter_StreamPeer::write_bytes(const void* data_src, uint32_t num_byt
         ELSE_ADD_ERROR_IF(e > 0, ERROR::READ_ERROR)
         last_bytes_copied = static_cast<int64_t>(num_written);
     }
-    return num_errors_this_op == 0;
+    return end_op();
 }
 
 /*****************
@@ -3409,8 +3568,8 @@ int64_t ReaderWriter_PtrWithLimit::get_write_pos() {
     return wpos;
 }
 bool ReaderWriter_PtrWithLimit::seek_read_pos(int64_t delta, SEEK from) {
-    clear_deltas();
-    ADD_ERROR_RETURN_FALSE_IF(ptr == nullptr, ERROR::INVALID_STATE)
+    start_op();
+    ADD_ERROR_END_OP_RETURN_IF(ptr == nullptr, ERROR::INVALID_READER_WRITER)
     int64_t old_pos = rpos;
     int64_t new_pos = old_pos;
     int64_t len = static_cast<int64_t>(limit);
@@ -3427,18 +3586,18 @@ bool ReaderWriter_PtrWithLimit::seek_read_pos(int64_t delta, SEEK from) {
             new_pos = len + delta;
             break;
         }
-        default: ADD_ERROR_RETURN_FALSE(ERROR::INVALID_ENUM_INPUT)
+        default: ADD_ERROR_END_OP_BLOCK(ERROR::INVALID_SEEK_ENUM)
     }
     ADD_ERROR_IF(new_pos < 0, ERROR::SEEK_BEFORE_DATA_RANGE)
     ELSE_ADD_ERROR_IF(new_pos > len, ERROR::SEEK_AFTER_DATA_RANGE)
     new_pos = MAX((int64_t)0, MIN(new_pos, len));
     rpos = new_pos;
     last_seek_delta = new_pos - old_pos;
-    return num_errors_this_op == 0;
+    return end_op();
 }
 bool ReaderWriter_PtrWithLimit::seek_write_pos(int64_t delta, SEEK from) {
-    clear_deltas();
-    ADD_ERROR_RETURN_FALSE_IF(ptr == nullptr, ERROR::INVALID_STATE)
+    start_op();
+    ADD_ERROR_END_OP_RETURN_IF(ptr == nullptr, ERROR::INVALID_READER_WRITER)
     int64_t old_pos = wpos;
     int64_t new_pos = old_pos;
     int64_t len = static_cast<int64_t>(limit);
@@ -3455,18 +3614,18 @@ bool ReaderWriter_PtrWithLimit::seek_write_pos(int64_t delta, SEEK from) {
             new_pos = len + delta;
             break;
         }
-        default: ADD_ERROR_RETURN_FALSE(ERROR::INVALID_ENUM_INPUT)
+        default: ADD_ERROR_END_OP_BLOCK(ERROR::INVALID_SEEK_ENUM)
     }
     ADD_ERROR_IF(new_pos < 0, ERROR::SEEK_BEFORE_DATA_RANGE)
     ELSE_ADD_ERROR_IF(new_pos > len, ERROR::SEEK_AFTER_DATA_RANGE)
     new_pos = MAX((int64_t)0, MIN(new_pos, len));
     wpos = new_pos;
     last_seek_delta = new_pos - old_pos;
-    return num_errors_this_op == 0;
+    return end_op();
 }
 bool ReaderWriter_PtrWithLimit::read_bytes(void* data_dst, uint32_t num_bytes, bool no_seek, bool no_copy) {
-    clear_deltas();
-    ADD_ERROR_RETURN_FALSE_IF(ptr == nullptr, ERROR::INVALID_STATE)
+    start_op();
+    ADD_ERROR_END_OP_RETURN_IF(ptr == nullptr, ERROR::INVALID_READER_WRITER)
     int64_t end = rpos + static_cast<int64_t>(num_bytes);
     int64_t len = static_cast<int64_t>(limit);
     ADD_ERROR_IF(end > len, ERROR::OUT_OF_DATA_TO_READ)
@@ -3481,11 +3640,11 @@ bool ReaderWriter_PtrWithLimit::read_bytes(void* data_dst, uint32_t num_bytes, b
         rpos = end;
         last_seek_delta = real_num_bytes;
     }
-    return num_errors_this_op == 0;
+    return end_op();
 }
 bool ReaderWriter_PtrWithLimit::write_bytes(const void* data_src, uint32_t num_bytes, bool no_seek, bool no_copy) {
-    clear_deltas();
-    ADD_ERROR_RETURN_FALSE_IF(ptr == nullptr, ERROR::INVALID_STATE)
+    start_op();
+    ADD_ERROR_END_OP_RETURN_IF(ptr == nullptr, ERROR::INVALID_READER_WRITER)
     int64_t end = wpos + static_cast<int64_t>(num_bytes);
     int64_t len = static_cast<int64_t>(limit);
     if (!no_copy) {
@@ -3505,11 +3664,116 @@ bool ReaderWriter_PtrWithLimit::write_bytes(const void* data_src, uint32_t num_b
         last_seek_delta = num_bytes;
         wpos = end;
     }
-    return num_errors_this_op == 0;
+    return end_op();
 }
+
+/*****************
+* Serializer
+*****************/
 
 void Serializer::_bind_methods() {
-    ClassDB::bind_method(D_METHOD("serialize", "reader_writer"), &Serializer::serialize); \
-    ClassDB::bind_method(D_METHOD("deserialize", "reader_writer"), &Serializer::deserialize); \
+    ClassDB::bind_method(D_METHOD("serialize"), &Serializer::serialize); \
+    ClassDB::bind_method(D_METHOD("deserialize"), &Serializer::deserialize); \
 }
 
+// /*****************
+// * TESTS
+// *****************/
+
+// // #ifdef DEV_ENABLED
+// #pragma message "Running Serial module tests..."
+// constexpr uint32_t get_compile_time_seed() {
+//     const char* time = __TIME__; // e.g.
+    
+//     uint32_t hours   = (time[0] - '0') * 10 + (time[1] - '0');
+//     uint32_t minutes = (time[3] - '0') * 10 + (time[4] - '0');
+//     uint32_t seconds = (time[6] - '0') * 10 + (time[7] - '0');
+    
+//     return hours * 3600 + minutes * 60 + seconds;
+// }
+
+// class CTR {
+// private:
+//     uint32_t state;
+
+//     static constexpr uint32_t multiplier = 214013;
+//     static constexpr uint32_t increment  = 2531011;
+
+// public:
+//     constexpr CTR(uint32_t seed) : state(seed) {}
+
+//     constexpr uint32_t next() {
+//         state = state * multiplier + increment;
+//         return state;
+//     }
+
+//     constexpr void fill_bytes(void* dst, int count) {
+//         while (count > 0) {
+//             state = state * multiplier + increment;
+//             __builtin_memcpy(dst, &state, MIN((int)4, count));
+//             count -= 4;
+//         }
+//     }
+
+//     constexpr uint32_t next_range(uint32_t min, uint32_t max) {
+//         return min + (next() % (max - min + 1));
+//     }
+// };
+// static constexpr bool test_serializer() {
+//     using GODOT_TYPE = ReaderWriter::GODOT_TYPE;
+//     using SERIAL_TYPE = ReaderWriter::SERIAL_TYPE;
+//     const uint32_t ARENA_MAX = 1024;
+//     const uint32_t TYPE_MAX = 64;
+//     uint8_t serial_arena[ARENA_MAX] = {};
+//     uint8_t native_arena[ARENA_MAX] = {};
+//     uint8_t gd_types[TYPE_MAX] = {};
+//     uint8_t s_types[TYPE_MAX] = {};
+//     uint8_t var_lens[TYPE_MAX] = {};
+//     uint16_t ser_arena_len = 0;
+//     uint16_t nat_arena_len = 0;
+//     uint8_t type_len = 0;
+//     CTR ctr = CTR(get_compile_time_seed());
+//     while (nat_arena_len < (ARENA_MAX - 68) && ser_arena_len < (ARENA_MAX - 68) && type_len < TYPE_MAX) {
+//         uint8_t godot_type = ctr.next_range(GODOT_TYPE::BOOLEAN, GODOT_TYPE::PACKED_COLOR_ARRAY);
+//         while (godot_type == GODOT_TYPE::ARRAY || godot_type == GODOT_TYPE::DICTIONARY) {
+//             godot_type = ctr.next_range(GODOT_TYPE::BOOLEAN, GODOT_TYPE::PACKED_COLOR_ARRAY);
+//         }
+//         uint16_t godot_elem_size = ReaderWriter::GODOT_SIZE[godot_type - GODOT_TYPE::_GD_TYPE_MIN];
+//         bool is_arr = godot_type >= GODOT_TYPE::STRING;
+//         uint32_t max_arr_len = is_arr ? 4 : 1;
+//         uint8_t arr_len = ctr.next_range(1, max_arr_len);
+//         uint16_t len_len = is_arr ? 4 : 0;
+//         uint8_t ser_type = 0;
+//         if (godot_type == GODOT_TYPE::STRING) {
+//             ser_type = ctr.next_range(SERIAL_TYPE::U8, SERIAL_TYPE::I32);
+//             if (ser_type == SERIAL_TYPE::I8) {
+//                 ser_type = SERIAL_TYPE::U8;
+//             } else if (ser_type == SERIAL_TYPE::I16) {
+//                 ser_type = SERIAL_TYPE::U16;
+//             } else if (ser_type == SERIAL_TYPE::I32) {
+//                 ser_type = SERIAL_TYPE::U32;
+//             }
+//         } else {
+//             ser_type = ctr.next_range(SERIAL_TYPE::BOOL, SERIAL_TYPE::F64);
+//         }
+//         uint16_t ser_elem_size = ReaderWriter::SERIAL_SIZE[ser_type - SERIAL_TYPE::_SERIAL_TYPE_MIN];
+//         uint16_t ser_size = (arr_len * ser_elem_size) + len_len;
+//         uint16_t godot_size = (arr_len * godot_elem_size) + len_len;
+//         uint16_t ser_end = ser_arena_len + ser_size;
+//         uint16_t nat_end = nat_arena_len + godot_size;
+//         if (ser_end > ARENA_MAX || nat_end > ARENA_MAX) {
+//             break;
+//         }
+//         var_lens[type_len] = arr_len;
+//         s_types[type_len] = ser_type;
+//         gd_types[type_len] = godot_type;
+//         ctr.fill_bytes(&native_arena[nat_arena_len], godot_size);
+//     }
+//     ReaderWriter_PtrWithLimit rw_inner = {}
+//     for (uint8_t i = 0; i < type_len; i += 1) {
+
+//     }
+//     return end_op();
+// }
+// static_assert(test_serializer());
+// // #endif

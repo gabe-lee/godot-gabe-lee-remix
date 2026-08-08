@@ -5,6 +5,12 @@
 #include "core/io/stream_peer.h"
 #include "core/math/aabb.h"
 #include "core/math/math_defs.h"
+#include "core/math/projection.h"
+#include "core/math/quaternion.h"
+#include "core/math/transform_2d.h"
+#include "core/math/vector2.h"
+#include "core/math/vector3.h"
+#include "core/math/vector4.h"
 #include "core/object/ref_counted.h"
 #include "core/typedefs.h"
 #include "core/variant/type_info.h"
@@ -59,6 +65,8 @@ class ReaderWriter_PackedByteArray;
 class ReaderWriter_StreamPeer;
 class ReaderWriter_PtrWithLimit;
 
+class Serializer;
+
 class ReaderWriter: public RefCounted {
     GDCLASS(ReaderWriter, RefCounted);
 private:
@@ -75,50 +83,11 @@ private:
     static constexpr bool ENDIAN_KNOWN = false;
     static constexpr bool TARGET_IS_LITTLE_ENDIAN = true;
 #endif
-protected:
-    int64_t last_seek_delta = 0;
-    uint32_t last_bytes_copied = 0;
-    uint32_t num_errors = 0;
-    uint32_t num_errors_this_op = 0;
-    uint8_t first_error = ERROR::NONE;
-    uint8_t last_error = ERROR::NONE;
-
-    static void _bind_methods();
-    
 public:
-    static constexpr uint32_t INVALID = 0xFFFFFFFF; 
-    enum ERROR {
-        NONE = 0,
-        INVALID_STATE,
-        INVALID_ENUM_INPUT,
-        INVALID_TYPE_TAG,
-        READ_ERROR,
-        WRITE_ERROR,
-        OUT_OF_DATA_TO_READ,
-        OUT_OF_SPACE_TO_WRITE,
-        ARRAY_SOURCE_TOO_SHORT_FOR_OFFSET_AND_COUNT,
-        CANNOT_SEEK_READ,
-        CANNOT_SEEK_WRITE,
-        CANNOT_READ,
-        CANNOT_WRITE,
-        CANNOT_GET,
-        CANNOT_SET,
-        SEEK_ERROR,
-        SEEK_AFTER_DATA_RANGE,
-        SEEK_BEFORE_DATA_RANGE,
-        _ERR_LIMIT,
-        _ERR_INVALID = 0xFFFFFFFF,
-    };
-    enum SEEK {
-        FROM_START = _ERR_LIMIT,
-        FROM_CURRENT,
-        FROM_END,
-        _SEEK_LIMIT,
-        _SEEK_INVALID = 0xFFFFFFFF,
-        _SEEK_MIN = _ERR_LIMIT,
-    };
-    enum GODOT_TYPE {
-        BOOLEAN = _SEEK_LIMIT,
+    enum GODOT_TYPE: uint32_t {
+        _GD_TYPE_SHIFT = 0,
+        _GD_TYPE_MIN = 0,
+        BOOLEAN = _GD_TYPE_MIN,
         INTEGER,
         FLOAT,
         VEC_2,
@@ -151,10 +120,70 @@ public:
         PACKED_VECTOR4_ARRAY,
         PACKED_COLOR_ARRAY,
         ANY,
+        NIL,
         _GD_TYPE_LIMIT,
         _GD_TYPE_INVALID = 0xFFFFFFFF,
+        _GD_TYPE_NUM = _GD_TYPE_LIMIT - _GD_TYPE_MIN,
+        _GD_TYPE_BITS = 6,
+        _GD_TYPE_MASK = (1 << _GD_TYPE_BITS) - 1,
+        _GD_TYPE_ABS_LIMIT = (1 << _GD_TYPE_BITS) - _GD_TYPE_MIN,
+        _GD_TYPE_CUSTOM_ALLOWED = _GD_TYPE_ABS_LIMIT - _GD_TYPE_LIMIT,
         RECT_3 = AABB,
-        _GD_TYPE_MIN = _SEEK_LIMIT,
+        _GD_TYPE_CUSTOM = _GD_TYPE_LIMIT,
+    };
+    enum SERIAL_TYPE: uint32_t {
+        _SERIAL_TYPE_SHIFT = _GD_TYPE_BITS,
+        _SERIAL_TYPE_MIN = 1 << _SERIAL_TYPE_SHIFT,
+        BOOL = _SERIAL_TYPE_MIN,
+        U8,
+        I8,
+        U16,
+        I16,
+        U32,
+        I32,
+        U64,
+        I64,
+        F16,
+        F32,
+        F64,
+        DEFAULT,
+        _SERIAL_TYPE_LIMIT,
+        _SERIAL_INVALID = 0xFFFFFFFF,
+        _SERIAL_TYPE_NUM = _SERIAL_TYPE_LIMIT - _SERIAL_TYPE_MIN,
+        _SERIAL_TYPE_BITS = 4,
+        _SERIAL_TYPE_MASK = (1 << _SERIAL_TYPE_BITS) - 1,
+        _SERIAL_TYPE_ABS_LIMIT = (1 << _SERIAL_TYPE_BITS) + _SERIAL_TYPE_MIN,
+        _SERIAL_TYPE_CUSTOM_ALLOWED = _SERIAL_TYPE_ABS_LIMIT - _SERIAL_TYPE_LIMIT,
+        REAL = sizeof(real_t) == 4 ? F32 : F64,
+        _SERIAL_TYPE_CUSTOM = _SERIAL_TYPE_LIMIT,
+    };
+    enum SEEK: uint8_t {
+        FROM_START = 0,
+        FROM_CURRENT,
+        FROM_END,
+    };
+    enum ERROR: uint8_t {
+        NONE = 0,
+        INVALID_READER_WRITER,
+        INVALID_SERIALIZER,
+        INVALID_SERIAL_TYPE,
+        INVALID_GODOT_TYPE,
+        INVALID_SEEK_ENUM,
+        INVALID_TYPE_TAG_IN_SERIAL_DATA,
+        READ_ERROR,
+        WRITE_ERROR,
+        OUT_OF_DATA_TO_READ,
+        OUT_OF_SPACE_TO_WRITE,
+        ARRAY_SOURCE_TOO_SHORT_FOR_OFFSET_AND_COUNT,
+        CANNOT_SEEK_READ,
+        CANNOT_SEEK_WRITE,
+        CANNOT_READ,
+        CANNOT_WRITE,
+        CANNOT_GET,
+        CANNOT_SET,
+        SEEK_ERROR,
+        SEEK_AFTER_DATA_RANGE,
+        SEEK_BEFORE_DATA_RANGE,
     };
     static constexpr uint32_t GODOT_ELEM_COUNT[] = {
         1,// BOOL,
@@ -177,67 +206,74 @@ public:
         4,// QUATERNION,
         16,// PROJECTION,
         1,// STRING,
-        1,// VARIANT
+        1,// DICTIONARY,
+        1,// ARRAY,
+        1,// PACKED_BYTE_ARRAY,
+        4,// PACKED_INT32_ARRAY,
+        8,// PACKED_INT64_ARRAY,
+        4,// PACKED_FLOAT32_ARRAY,
+        8,// PACKED_FLOAT64_ARRAY,
+        4,// PACKED_STRING_ARRAY,
+        sizeof(Vector2),// PACKED_VECTOR2_ARRAY,
+        sizeof(Vector3),// PACKED_VECTOR3_ARRAY,
+        sizeof(Vector4),// PACKED_VECTOR4_ARRAY,
+        sizeof(Color),// PACKED_COLOR_ARRAY,
+        sizeof(Vector2),// ANY,
+        0, // NIL,
     };
-    using T_NATIVE_ELEM_LIST = std::tuple<
-        bool,// BOOL,
-        int64_t,// INT,
-        double,// FLOAT,
-        real_t,// VEC_2,
-        int32_t,// VEC_2I,
-        real_t,// VEC_3,
-        int32_t,// VEC_3I,
-        real_t,// VEC_4,
-        int32_t,// VEC_4I,
-        float,// COLOR,
-        real_t,// RECT_2,
-        int32_t,// RECT_2I,
-        real_t,// AABB,
-        real_t,// PLANE,
-        real_t,// BASIS,
-        real_t,// TRANSFORM_2D,
-        real_t,// TRANSFORM_3D,
-        real_t,// QUATERNION,
-        real_t,// PROJECTION,
-        uint32_t,// STRING,
-        void// VARIANT,
-    >;
+    static constexpr uint32_t GODOT_SIZE[] = {
+        sizeof(bool),// BOOL,
+        sizeof(int64_t),// INT,
+        sizeof(double),// FLOAT,
+        sizeof(Vector2),// VEC_2,
+        sizeof(Vector2i),// VEC_2I,
+        sizeof(Vector3),// VEC_3,
+        sizeof(Vector3i),// VEC_3I,
+        sizeof(Vector4),// VEC_4,
+        sizeof(Vector4i),// VEC_4I,
+        sizeof(Color),// COLOR,
+        sizeof(Rect2),// RECT_2,
+        sizeof(Rect2i),// RECT_2I,
+        sizeof(::AABB),// AABB,
+        sizeof(Plane),// PLANE,
+        sizeof(Basis),// BASIS,
+        sizeof(Transform2D),// TRANSFORM_2D,
+        sizeof(Transform3D),// TRANSFORM_3D,
+        sizeof(Quaternion),// QUATERNION,
+        sizeof(Projection),// PROJECTION,
+        sizeof(char32_t),// STRING,
+        sizeof(Variant),// DICTIONARY,
+        sizeof(Variant),// ARRAY,
+        sizeof(uint8_t),// PACKED_BYTE_ARRAY,
+        sizeof(int32_t),// PACKED_INT32_ARRAY,
+        sizeof(int64_t),// PACKED_INT64_ARRAY,
+        sizeof(float),// PACKED_FLOAT32_ARRAY,
+        sizeof(double),// PACKED_FLOAT64_ARRAY,
+        sizeof(char32_t),// PACKED_STRING_ARRAY,
+        sizeof(Vector2),// PACKED_VECTOR2_ARRAY,
+        sizeof(Vector3),// PACKED_VECTOR3_ARRAY,
+        sizeof(Vector4),// PACKED_VECTOR4_ARRAY,
+        sizeof(Color),// PACKED_COLOR_ARRAY,
+        sizeof(Variant),// ANY,
+        0, // NIL,
+    };
     
-    enum SERIAL_TYPE {
-        BOOL = _GD_TYPE_LIMIT,
-        U8,
-        I8,
-        U16,
-        I16,
-        U32,
-        I32,
-        U64,
-        I64,
-        F16,
-        F32,
-        F64,
-        DEFAULT,
-        _SERIAL_TYPE_LIMIT,
-        _SERIAL_INVALID = 0xFFFFFFFF,
-        _SERIAL_TYPE_MIN = _GD_TYPE_LIMIT,
-        REAL = sizeof(real_t) == 4 ? F32 : F64,
+    static constexpr uint32_t SERIAL_SIZE[] {
+        1,// BOOL = _GD_TYPE_LIMIT,
+        1,// U8,
+        1,// I8,
+        2,// U16,
+        2,// I16,
+        4,// U32,
+        4,// I32,
+        8,// U64,
+        8,// I64,
+        2,// F16,
+        4,// F32,
+        8,// F64,
+        1,// DEFAULT,
     };
-    using T_SERIAL_TYPE_LIST = std::tuple<
-        bool, // BOOL,
-        uint8_t,// U8,
-        int8_t,// I8,
-        uint16_t,// U16,
-        int16_t,// I16,
-        uint32_t,// U32,
-        int32_t,// I32,
-        uint64_t,// U64,
-        int64_t,// I64,
-        HalfU16,// F16,
-        float,// F32,
-        double,// F64,
-        void//DEFAULT
-    >;
-    static constexpr uint32_t GODOT_DEFAULT_ELEM[] = {
+    static constexpr SERIAL_TYPE GODOT_DEFAULT_ELEM[] = {
         BOOL,// BOOL,
         I64,// INT,
         F64,// FLOAT,
@@ -260,8 +296,8 @@ public:
         U32,// STRING,
         _SERIAL_INVALID// VARIANT,
     };
-    static constexpr uint32_t VARIANT_TYPE_TO_GODOT_TYPE[] = {
-        _GD_TYPE_INVALID,// NIL,
+    static constexpr GODOT_TYPE VARIANT_TYPE_TO_GODOT_TYPE[] = {
+        NIL,// NIL,
 		BOOLEAN,// BOOL,
 		INTEGER,// INT,
 		FLOAT,// FLOAT,
@@ -302,6 +338,36 @@ public:
 		PACKED_VECTOR4_ARRAY,// PACKED_VECTOR4_ARRAY,
 		_GD_TYPE_INVALID,// VARIANT_MAX
     };
+    _FORCE_INLINE_ static constexpr uint32_t godot_type_elem_count(GODOT_TYPE type) {
+        return GODOT_ELEM_COUNT[type];
+    }
+    _FORCE_INLINE_ static constexpr uint32_t godot_type_size(GODOT_TYPE type) {
+        return GODOT_SIZE[type];
+    }
+    _FORCE_INLINE_ static constexpr SERIAL_TYPE godot_native_elem(GODOT_TYPE type) {
+        return GODOT_DEFAULT_ELEM[type];
+    }
+    _FORCE_INLINE_ static constexpr uint32_t godot_type_serial_size(GODOT_TYPE type, SERIAL_TYPE ser_type) {
+        return GODOT_ELEM_COUNT[type] * SERIAL_SIZE[ser_type - _SERIAL_TYPE_MIN];
+    }
+    _FORCE_INLINE_ static constexpr uint32_t serial_elem_size(SERIAL_TYPE ser_type) {
+        return SERIAL_SIZE[ser_type - _SERIAL_TYPE_MIN];
+    }
+    _FORCE_INLINE_ static constexpr GODOT_TYPE variant_type_to_godot_type(Variant::Type type) {
+        return VARIANT_TYPE_TO_GODOT_TYPE[type];
+    }
+protected:
+    int64_t last_seek_delta = 0;
+    uint32_t last_bytes_copied = 0;
+    uint32_t num_errors = 0;
+    uint32_t op_depth = 0;
+    uint32_t num_errors_this_op = 0;
+    ERROR first_error = ERROR::NONE;
+    ERROR last_error = ERROR::NONE;
+
+    static void _bind_methods();
+    
+public:
 
     ReaderWriter() = default;
 
@@ -313,15 +379,18 @@ public:
     virtual bool write_bytes(const void* data_src, uint32_t num_bytes, bool no_seek = false, bool no_copy = false) = 0;
 
     _FORCE_INLINE_ void clear_errors();
-    _FORCE_INLINE_ void clear_deltas();
+    _FORCE_INLINE_ void start_op();
+    _FORCE_INLINE_ bool end_op();
+    _FORCE_INLINE_ bool end_op_with_error(ERROR err);
     _FORCE_INLINE_ bool has_errors();
-    _FORCE_INLINE_ uint8_t get_first_error();
-    _FORCE_INLINE_ uint8_t get_last_error();
+    _FORCE_INLINE_ ERROR get_first_error();
+    _FORCE_INLINE_ ERROR get_last_error();
     _FORCE_INLINE_ uint32_t get_num_errors();
+    _FORCE_INLINE_ uint32_t get_num_errors_this_op();
     _FORCE_INLINE_ int64_t get_last_seek_delta();
     _FORCE_INLINE_ uint32_t get_last_bytes_copied();
-    inline void add_result(int64_t p_seek_delta, uint32_t p_bytes_read_or_written, uint8_t p_error = ERROR::NONE);
-    inline void add_error(uint8_t p_error = ERROR::NONE);
+    inline void add_result(int64_t p_seek_delta, uint32_t p_bytes_read_or_written, ERROR p_error = ERROR::NONE);
+    inline void add_error(ERROR p_error);
 
     _FORCE_INLINE_ bool get_bytes(void* data_dst, uint32_t num_bytes);
     _FORCE_INLINE_ bool set_bytes(const void* data_src, uint32_t num_bytes);
@@ -379,23 +448,6 @@ public:
 
     template<typename T_SERIAL, typename T_NATIVE>
     inline bool write_t_cast_val(T_NATIVE val_src);
-
-    template<typename T_SERIAL, typename T_NATIVE, typename T_NATIVE_ELEM, uint32_t T_NATIVE_ELEM_COUNT>
-    inline T_NATIVE get_gds_impl();
-
-    template<typename T_SERIAL, typename T_NATIVE, typename T_NATIVE_ELEM, uint32_t T_NATIVE_ELEM_COUNT>
-    inline T_NATIVE read_gds_impl();
-
-    template<typename T_SERIAL, typename T_NATIVE, typename T_NATIVE_ELEM, uint32_t T_NATIVE_ELEM_COUNT>
-    inline bool set_gds_impl(T_NATIVE val);
-
-    template<typename T_SERIAL, typename T_NATIVE, typename T_NATIVE_ELEM, uint32_t T_NATIVE_ELEM_COUNT>
-    inline bool write_gds_impl(T_NATIVE val);
-
-    Variant get_gds(GODOT_TYPE type, SERIAL_TYPE serial_type = SERIAL_TYPE::DEFAULT);
-    Variant read_gds(GODOT_TYPE type, SERIAL_TYPE serial_type = SERIAL_TYPE::DEFAULT);
-    bool set_gds(GODOT_TYPE type, Variant val, SERIAL_TYPE serial_type = SERIAL_TYPE::DEFAULT);
-    bool write_gds(GODOT_TYPE type, Variant val, SERIAL_TYPE serial_type = SERIAL_TYPE::DEFAULT);
 
     template<typename T>
     inline bool get_t_array(T* val_dst, uint32_t count);
@@ -492,7 +544,38 @@ public:
 
     template<typename T_SERIAL, typename T_NATIVE, typename T_ARRAY, typename T_NATIVE_ELEM, uint32_t T_NATIVE_ELEM_COUNT>
     bool write_gds_array_len_prefix(T_ARRAY src_array, uint32_t array_offset, uint32_t count);
-    
+
+    template<typename T_SERIAL, typename T_NATIVE, typename T_NATIVE_ELEM, uint32_t T_NATIVE_ELEM_COUNT>
+    inline T_NATIVE get_gds_impl();
+
+    template<typename T_SERIAL, typename T_NATIVE, typename T_NATIVE_ELEM, uint32_t T_NATIVE_ELEM_COUNT>
+    inline T_NATIVE read_gds_impl();
+
+    template<typename T_SERIAL, typename T_NATIVE, typename T_NATIVE_ELEM, uint32_t T_NATIVE_ELEM_COUNT>
+    inline bool set_gds_impl(T_NATIVE val);
+
+    template<typename T_SERIAL, typename T_NATIVE, typename T_NATIVE_ELEM, uint32_t T_NATIVE_ELEM_COUNT>
+    inline bool write_gds_impl(T_NATIVE val);
+
+    Variant get_gds(GODOT_TYPE type, SERIAL_TYPE serial_type = SERIAL_TYPE::DEFAULT);
+    Variant read_gds(GODOT_TYPE type, SERIAL_TYPE serial_type = SERIAL_TYPE::DEFAULT);
+    bool set_gds(GODOT_TYPE type, Variant val, SERIAL_TYPE serial_type = SERIAL_TYPE::DEFAULT);
+    bool write_gds(GODOT_TYPE type, Variant val, SERIAL_TYPE serial_type = SERIAL_TYPE::DEFAULT);
+
+    inline bool get_serializable(Ref<Serializer> ser);
+    inline bool read_serializable(Ref<Serializer> ser);
+    inline bool set_serializable(Ref<Serializer> ser);
+    inline bool write_serializable(Ref<Serializer> ser);
+
+    inline bool get_serializable_array(Array array_of_serializers, uint32_t count);
+    inline bool read_serializable_array(Array array_of_serializers, uint32_t count);
+    inline bool set_serializable_array(Array array_of_serializers, uint32_t count);
+    inline bool write_serializable_array(Array array_of_serializers, uint32_t count);
+
+    inline bool get_serializable_array_len_prefix(Array array_of_serializers);
+    inline bool read_serializable_array_len_prefix(Array array_of_serializers);
+    inline bool set_serializable_array_len_prefix(Array array_of_serializers, uint32_t count);
+    inline bool write_serializable_array_len_prefix(Array array_of_serializers, uint32_t count);
 
     _FORCE_INLINE_ static Ref<ReaderWriter_FileAccess> from_file_access(Ref<FileAccess> file_access);
     _FORCE_INLINE_ static Ref<ReaderWriter_PackedByteArray> from_packed_byte_array(PackedByteArray file_access);
@@ -551,7 +634,7 @@ public:
 
 class ReaderWriter_PtrWithLimit: public ReaderWriter {
 private:
-    uint8_t* ptr;
+    uint8_t* ptr = nullptr;
     uint64_t limit = 0;
     int64_t wpos = 0;
     int64_t rpos = 0;
@@ -580,7 +663,6 @@ protected:
     static void _bind_methods();
 
 public:
-
     virtual void serialize(Ref<ReaderWriter> reader_writer) = 0;
     virtual void deserialize(Ref<ReaderWriter> reader_writer) = 0;
 };
